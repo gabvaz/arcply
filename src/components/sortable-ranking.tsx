@@ -79,6 +79,7 @@ function useRankingSort<T extends {
   gamesLost: number;
   gameDiff: number;
   matchesPlayed: number;
+  matchesTotal?: number;
   withdrawn?: boolean;
 }>(rows: T[]) {
   const [sort, setSort] = useState(DEFAULT_SORT);
@@ -185,7 +186,7 @@ export function RankingTable({ rows }: { rows: RankingRow[] }) {
                     {r.gameDiff > 0 ? `+${r.gameDiff}` : r.gameDiff}
                   </td>
                   <td className="px-4 py-3.5 text-right tabular-nums text-ink-muted">
-                    {r.matchesPlayed}
+                    {r.matchesPlayed}/{r.matchesTotal}
                   </td>
                 </tr>
               );
@@ -293,7 +294,7 @@ export function IndividualRankingTable({ rows }: { rows: IndividualRankingRow[] 
                         {r.gameDiff > 0 ? `+${r.gameDiff}` : r.gameDiff}
                       </td>
                       <td className="px-4 py-3.5 text-right tabular-nums text-ink-muted">
-                        {r.matchesPlayed}
+                        {r.matchesPlayed}/{r.matchesTotal}
                       </td>
                     </tr>
                   );

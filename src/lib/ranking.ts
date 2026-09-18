@@ -23,6 +23,7 @@ export type RankingRow = {
   gamesLost: number;
   gameDiff: number;
   matchesPlayed: number;
+  matchesTotal: number;
   withdrawn: boolean;
 };
 
@@ -36,6 +37,7 @@ export type IndividualRankingRow = {
   gamesLost: number;
   gameDiff: number;
   matchesPlayed: number;
+  matchesTotal: number;
 };
 
 export type IndividualPlayerInput = {
@@ -77,17 +79,21 @@ export function computeRanking(
       gamesLost: 0,
       gameDiff: 0,
       matchesPlayed: 0,
+      matchesTotal: 0,
       withdrawn: p.withdrawnAt != null,
     });
   }
 
   for (const m of matches) {
-    if (m.status !== "completed") continue;
-    if (m.gamesHome == null || m.gamesAway == null) continue;
-
     const home = rows.get(m.pairHomeId);
     const away = rows.get(m.pairAwayId);
     if (!home || !away) continue;
+
+    home.matchesTotal += 1;
+    away.matchesTotal += 1;
+
+    if (m.status !== "completed") continue;
+    if (m.gamesHome == null || m.gamesAway == null) continue;
 
     home.gamesWon += m.gamesHome;
     home.gamesLost += m.gamesAway;
@@ -140,18 +146,28 @@ export function computeIndividualRanking(
       gamesLost: 0,
       gameDiff: 0,
       matchesPlayed: 0,
+      matchesTotal: 0,
     });
   }
 
   const pairById = new Map(pairs.map((p) => [p.id, p]));
 
   for (const m of matches) {
-    if (m.status !== "completed") continue;
-    if (m.gamesHome == null || m.gamesAway == null) continue;
-
     const homePair = pairById.get(m.pairHomeId);
     const awayPair = pairById.get(m.pairAwayId);
     if (!homePair || !awayPair) continue;
+
+    for (const pid of [homePair.playerAId, homePair.playerBId]) {
+      const row = rows.get(pid);
+      if (row) row.matchesTotal += 1;
+    }
+    for (const pid of [awayPair.playerAId, awayPair.playerBId]) {
+      const row = rows.get(pid);
+      if (row) row.matchesTotal += 1;
+    }
+
+    if (m.status !== "completed") continue;
+    if (m.gamesHome == null || m.gamesAway == null) continue;
 
     const homeWon = m.gamesHome > m.gamesAway;
     const awayWon = m.gamesAway > m.gamesHome;

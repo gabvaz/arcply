@@ -96,10 +96,6 @@ export default async function ManagePlayPage({
   const doneMatches = play.matches.filter((m) => m.status === "completed").length;
 
   const rounds = groupMatchesIntoRounds(play.matches);
-  const lastRound = rounds[rounds.length - 1];
-  const canGenerateNextRandom =
-    isRandom && play.matches.length > 0 && !!lastRound?.complete;
-
   const pendingPlayerIds = new Set(
     play.matches
       .filter((m) => m.status === "pending")
@@ -283,7 +279,6 @@ export default async function ManagePlayPage({
             <GenerateRoundButton
               playId={play.id}
               mode="next"
-              disabled={!canGenerateNextRandom}
               label="Gerar próxima rodada"
               pendingLabel="Sorteando…"
             />
@@ -294,6 +289,8 @@ export default async function ManagePlayPage({
       <AdminMatchRounds
         playId={play.id}
         matches={play.matches}
+        allowLineupEdit={isRandom}
+        roster={play.entries.map((e) => e.player)}
         emptyHint={
           isRandom
             ? "Com ≥4 jogadores, gere a 1ª rodada."

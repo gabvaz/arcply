@@ -5,6 +5,7 @@ import { pairLabel } from "@/lib/labels";
 import { Badge } from "@/components/ui";
 import { groupMatchesIntoRounds } from "@/lib/schedule";
 import { ScoreForm } from "@/components/score-form";
+import { RandomMatchLineupEditor } from "@/components/random-match-lineup";
 
 type MatchView = {
   id: string;
@@ -18,12 +19,16 @@ type MatchView = {
   pairHome: {
     id: string;
     label: string | null;
+    playerAId: string;
+    playerBId: string;
     playerA: { name: string };
     playerB: { name: string };
   };
   pairAway: {
     id: string;
     label: string | null;
+    playerAId: string;
+    playerBId: string;
     playerA: { name: string };
     playerB: { name: string };
   };
@@ -198,10 +203,14 @@ export function MatchList({ matches }: { matches: MatchView[] }) {
 export function AdminMatchRounds({
   playId,
   matches,
+  roster = [],
+  allowLineupEdit = false,
   emptyHint = "Com ≥2 duplas ativas, gere o chaveamento.",
 }: {
   playId: string;
   matches: MatchView[];
+  roster?: { id: string; name: string; gender?: "MALE" | "FEMALE" }[];
+  allowLineupEdit?: boolean;
   emptyHint?: string;
 }) {
   const rounds = useMemo(() => groupMatchesIntoRounds(matches), [matches]);
@@ -234,8 +243,9 @@ export function AdminMatchRounds({
   return (
     <div className="space-y-5">
       <p className="text-sm text-ink-muted">
-        Em cada rodada, cada dupla joga no máximo uma vez. Navegue pelas rodadas
-        abaixo.
+        {allowLineupEdit
+          ? "Pode gerar a próxima rodada sem finalizar a atual. Use “Alterar jogadores” pra ajustar o lineup."
+          : "Em cada rodada, cada dupla joga no máximo uma vez. Navegue pelas rodadas abaixo."}
       </p>
 
       <RoundPicker rounds={meta} active={current.round} onSelect={setActive} />
@@ -268,13 +278,25 @@ export function AdminMatchRounds({
                   {m.status === "completed" ? "Finalizado" : "Pendente"}
                 </Badge>
               </div>
-              {m.status === "completed" ? (
-                <p className="mb-1 font-display text-lg font-bold leading-snug">
-                  {pairLabel(m.pairHome)}
-                  <span className="mx-2 text-mint">vs</span>
-                  {pairLabel(m.pairAway)}
-                </p>
+              {allowLineupEdit ? (
+                <RandomMatchLineupEditor
+                  playId={playId}
+                  matchId={m.id}
+                  roster={roster}
+                  completed={m.status === "completed"}
+                  initial={{
+                    homeA: m.pairHome.playerAId,
+                    homeB: m.pairHome.playerBId,
+                    awayA: m.pairAway.playerAId,
+                    awayB: m.pairAway.playerBId,
+                  }}
+                />
               ) : null}
+              <p className="mb-3 font-display text-lg font-bold leading-snug">
+                {pairLabel(m.pairHome)}
+                <span className="mx-2 text-mint">vs</span>
+                {pairLabel(m.pairAway)}
+              </p>
               <ScoreForm
                 playId={playId}
                 matchId={m.id}

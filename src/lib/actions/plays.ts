@@ -300,11 +300,7 @@ export async function generateNextRandomRound(playId: string) {
 
   const rounds = groupMatchesIntoRounds(play.matches);
   const last = rounds[rounds.length - 1];
-  if (!last?.complete) {
-    return { error: "Finalize todos os jogos da rodada atual antes" };
-  }
-
-  const nextRound = last.round + 1;
+  const nextRound = (last?.round ?? 0) + 1;
   return persistRandomRound(
     playId,
     play.entries.map((e) => e.playerId),
@@ -524,6 +520,132 @@ export async function clearScore(playId: string, matchId: string) {
       status: "pending",
     },
   });
+  revalidatePlay(playId);
+  return { ok: true };
+}
+
+/** Troca manual dos 4 jogadores de um jogo no formato RANDOM. */
+export async function updateRandomMatchLineup(
+  playId: string,
+  matchId: string,
+  lineup: {
+    homeA: string;
+    homeB: string;
+    awayA: string;
+    awayB: string;
+  },
+) {
+  await requireAdmin();
+
+  const newIds = [lineup.homeA, lineup.homeB, lineup.awayA, lineup.awayB];
+  if (newIds.some((id) => !id)) {
+    return { error: "Selecione os 4 jogadores" };
+  }
+  if (new Set(newIds).size !== 4) {
+    return { error: "Os 4 jogadores devem ser distintos" };
+  }
+
+  const playFull = await prisma.play.findUnique({
+    where: { id: playId },
+    include: { entries: true },
+  });
+  if (!playFull) return { error: "Play não encontrado" };
+  if (playFull.format !== "RANDOM") {
+    return { error: "Só disponível no formato aleatório" };
+  }
+
+  const entrySet = new Set(playFull.entries.map((e) => e.playerId));
+  for (const id of newIds) {
+    if (!entrySet.has(id)) {
+      return { error: "Jogador não está neste play" };
+    }
+  }
+
+  const match = await prisma.match.findFirst({
+    where: { id: matchId, playId },
+    include: { pairHome: true, pairAway: true },
+  });
+  if (!match) return { error: "Jogo não encontrado" };
+
+  const oldIds = [
+    match.pairHome.playerAId,
+    match.pairHome.playerBId,
+    match.pairAway.playerAId,
+    match.pairAway.playerBId,
+  ];
+
+  const roundMatches = await prisma.match.findMany({
+    where: { playId, round: match.round },
+    include: { pairHome: true, pairAway: true },
+  });
+
+  type Slot = { pairId: string; field: "playerAId" | "playerBId" };
+  function findSlot(playerId: string, excludePairIds: Set<string>): Slot | null {
+    for (const m of roundMatches) {
+      for (const pair of [m.pairHome, m.pairAway]) {
+        if (excludePairIds.has(pair.id)) continue;
+        if (pair.playerAId === playerId) {
+          return { pairId: pair.id, field: "playerAId" };
+        }
+        if (pair.playerBId === playerId) {
+          return { pairId: pair.id, field: "playerBId" };
+        }
+      }
+    }
+    return null;
+  }
+
+  const targetPairIds = new Set([match.pairHomeId, match.pairAwayId]);
+  const leaving = oldIds.filter((id) => !newIds.includes(id));
+  const arriving = newIds.filter((id) => !oldIds.includes(id));
+
+  // Pair each arriving (from another court / bye) with a leaving player for swap
+  const swaps: { slot: Slot; playerId: string }[] = [];
+  const leavingQueue = [...leaving];
+
+  for (const arriveId of arriving) {
+    const slot = findSlot(arriveId, targetPairIds);
+    if (slot) {
+      const replacement = leavingQueue.shift();
+      if (!replacement) {
+        return {
+          error:
+            "Não foi possível realocar — escolha outro jogador ou ajuste outro jogo",
+        };
+      }
+      swaps.push({ slot, playerId: replacement });
+    }
+    // else: arriving was on bye — leaving becomes bye, nothing to write
+  }
+
+  await prisma.$transaction(async (tx) => {
+    for (const s of swaps) {
+      await tx.pair.update({
+        where: { id: s.slot.pairId },
+        data: { [s.slot.field]: s.playerId },
+      });
+    }
+    await tx.pair.update({
+      where: { id: match.pairHomeId },
+      data: { playerAId: lineup.homeA, playerBId: lineup.homeB, label: null },
+    });
+    await tx.pair.update({
+      where: { id: match.pairAwayId },
+      data: { playerAId: lineup.awayA, playerBId: lineup.awayB, label: null },
+    });
+    if (match.status === "completed") {
+      await tx.match.update({
+        where: { id: matchId },
+        data: {
+          gamesHome: null,
+          gamesAway: null,
+          scoreOverride: false,
+          status: "pending",
+        },
+      });
+    }
+  });
+
   revalidatePlay(playId);
   return { ok: true };
 }
