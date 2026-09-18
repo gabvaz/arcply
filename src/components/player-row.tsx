@@ -2,16 +2,20 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Input, Label } from "@/components/ui";
+import { Button, Input, Label, Select } from "@/components/ui";
+import { Spinner } from "@/components/pending-button";
 import { deletePlayer, updatePlayer } from "@/lib/actions/players";
+import type { Gender } from "@prisma/client";
 
 export function PlayerRow({
   id,
   name,
+  gender,
   contact,
 }: {
   id: string;
   name: string;
+  gender: Gender;
   contact: string | null;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +25,7 @@ export function PlayerRow({
   return (
     <li className="surface rounded-3xl p-4 sm:p-5">
       <form
-        className="grid gap-3 sm:grid-cols-[1fr_1fr_auto_auto] sm:items-end"
+        className="grid gap-3 sm:grid-cols-[1fr_auto_1fr_auto_auto] sm:items-end"
         onSubmit={(e) => {
           e.preventDefault();
           setError(null);
@@ -35,19 +39,40 @@ export function PlayerRow({
       >
         <div>
           <Label>Nome</Label>
-          <Input name="name" defaultValue={name} required />
+          <Input name="name" defaultValue={name} required disabled={pending} />
+        </div>
+        <div>
+          <Label htmlFor={`gender-${id}`}>Gênero</Label>
+          <Select
+            id={`gender-${id}`}
+            name="gender"
+            defaultValue={gender}
+            required
+            disabled={pending}
+          >
+            <option value="MALE">Masculino</option>
+            <option value="FEMALE">Feminino</option>
+          </Select>
         </div>
         <div>
           <Label>Contato</Label>
-          <Input name="contact" defaultValue={contact ?? ""} />
+          <Input name="contact" defaultValue={contact ?? ""} disabled={pending} />
         </div>
-        <Button type="submit" variant="secondary" disabled={pending}>
-          Salvar
+        <Button type="submit" variant="secondary" disabled={pending} aria-busy={pending}>
+          {pending ? (
+            <>
+              <Spinner />
+              Salvando…
+            </>
+          ) : (
+            "Salvar"
+          )}
         </Button>
         <Button
           type="button"
           variant="danger"
           disabled={pending}
+          aria-busy={pending}
           onClick={() => {
             if (
               !confirm(
@@ -64,7 +89,14 @@ export function PlayerRow({
             });
           }}
         >
-          Excluir
+          {pending ? (
+            <>
+              <Spinner />
+              …
+            </>
+          ) : (
+            "Excluir"
+          )}
         </Button>
       </form>
       {error ? <p className="mt-2 text-sm font-medium text-coral">{error}</p> : null}

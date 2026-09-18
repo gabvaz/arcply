@@ -1,5 +1,6 @@
 import { auth, signIn } from "@/lib/auth";
-import { Button, Input, Label } from "@/components/ui";
+import { Input, Label } from "@/components/ui";
+import { PendingButton } from "@/components/pending-button";
 import { redirect } from "next/navigation";
 import { AuthError } from "next-auth";
 
@@ -54,9 +55,9 @@ export default async function LoginPage({
         {params.error ? (
           <p className="text-sm font-medium text-coral">{params.error}</p>
         ) : null}
-        <Button type="submit" variant="accent" className="w-full">
+        <PendingButton type="submit" variant="accent" className="w-full" pendingLabel="Entrando…">
           Entrar
-        </Button>
+        </PendingButton>
       </form>
     </div>
   );

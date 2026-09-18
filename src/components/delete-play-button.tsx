@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import { Button } from "@/components/ui";
+import { Spinner } from "@/components/pending-button";
 import { deletePlay } from "@/lib/actions/plays";
 
 export function DeletePlayButton({
@@ -21,6 +22,7 @@ export function DeletePlayButton({
       variant="danger"
       disabled={pending}
       className={compact ? "!px-3" : undefined}
+      aria-busy={pending}
       onClick={() => {
         if (
           !confirm(
@@ -34,7 +36,16 @@ export function DeletePlayButton({
         });
       }}
     >
-      {pending ? "…" : compact ? "Excluir" : "Excluir play"}
+      {pending ? (
+        <>
+          <Spinner />
+          …
+        </>
+      ) : compact ? (
+        "Excluir"
+      ) : (
+        "Excluir play"
+      )}
     </Button>
   );
 }

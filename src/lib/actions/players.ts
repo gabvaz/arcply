@@ -4,9 +4,11 @@ import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/session";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import type { Gender } from "@prisma/client";
 
 const playerSchema = z.object({
   name: z.string().trim().min(1, "Nome obrigatório"),
+  gender: z.enum(["MALE", "FEMALE"], { message: "Informe o gênero" }),
   contact: z.string().trim().optional(),
 });
 
@@ -14,6 +16,7 @@ export async function createPlayer(formData: FormData) {
   await requireAdmin();
   const parsed = playerSchema.safeParse({
     name: formData.get("name"),
+    gender: formData.get("gender"),
     contact: formData.get("contact") || undefined,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message };
@@ -21,6 +24,7 @@ export async function createPlayer(formData: FormData) {
   await prisma.player.create({
     data: {
       name: parsed.data.name,
+      gender: parsed.data.gender as Gender,
       contact: parsed.data.contact || null,
     },
   });
@@ -32,6 +36,7 @@ export async function updatePlayer(id: string, formData: FormData) {
   await requireAdmin();
   const parsed = playerSchema.safeParse({
     name: formData.get("name"),
+    gender: formData.get("gender"),
     contact: formData.get("contact") || undefined,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message };
@@ -40,6 +45,7 @@ export async function updatePlayer(id: string, formData: FormData) {
     where: { id },
     data: {
       name: parsed.data.name,
+      gender: parsed.data.gender as Gender,
       contact: parsed.data.contact || null,
     },
   });
@@ -70,7 +76,6 @@ export async function deletePlayer(id: string) {
         await tx.pair.deleteMany({ where: { id: { in: pairIds } } });
       }
 
-      // PlayEntry cascata via schema; delete explícito por segurança
       await tx.playEntry.deleteMany({ where: { playerId: id } });
       await tx.player.delete({ where: { id } });
     });
@@ -80,7 +85,6 @@ export async function deletePlayer(id: string) {
   }
 
   revalidatePath("/admin/players");
-  revalidatePath("/admin");
   revalidatePath("/admin/plays");
   return { ok: true };
 }

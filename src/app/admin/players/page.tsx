@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/session";
 import { prisma } from "@/lib/db";
-import { Button, Input, Label, LinkButton, Section } from "@/components/ui";
+import { Input, Label, LinkButton, Section, Select } from "@/components/ui";
+import { PendingButton } from "@/components/pending-button";
 import { createPlayer } from "@/lib/actions/players";
 import { PlayerRow } from "@/components/player-row";
 
@@ -26,19 +27,29 @@ export default async function PlayersPage() {
             "use server";
             await createPlayer(fd);
           }}
-          className="surface grid gap-3 rounded-3xl p-5 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+          className="surface grid gap-3 rounded-3xl p-5 sm:grid-cols-[1fr_auto_1fr_auto] sm:items-end"
         >
           <div>
             <Label htmlFor="name">Nome</Label>
             <Input id="name" name="name" required placeholder="Nome" />
           </div>
           <div>
+            <Label htmlFor="gender">Gênero</Label>
+            <Select id="gender" name="gender" required defaultValue="">
+              <option value="" disabled>
+                Selecione
+              </option>
+              <option value="MALE">Masculino</option>
+              <option value="FEMALE">Feminino</option>
+            </Select>
+          </div>
+          <div>
             <Label htmlFor="contact">Contato (opcional)</Label>
             <Input id="contact" name="contact" placeholder="WhatsApp / email" />
           </div>
-          <Button type="submit" variant="accent">
+          <PendingButton type="submit" variant="accent" pendingLabel="Cadastrando…">
             Cadastrar
-          </Button>
+          </PendingButton>
         </form>
       </Section>
 
@@ -54,7 +65,13 @@ export default async function PlayersPage() {
         ) : (
           <ul className="space-y-3">
             {players.map((p) => (
-              <PlayerRow key={p.id} id={p.id} name={p.name} contact={p.contact} />
+              <PlayerRow
+                key={p.id}
+                id={p.id}
+                name={p.name}
+                gender={p.gender}
+                contact={p.contact}
+              />
             ))}
           </ul>
         )}

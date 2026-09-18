@@ -2,6 +2,7 @@ export const FORMAT_LABELS = {
   ROUND_ROBIN: "Round-robin (todos contra todos)",
   ROUND_ROBIN_MULTI: "Round-robin × N rodadas",
   BALANCED_QUEUE: "Fila balanceada",
+  RANDOM: "Aleatório",
 } as const;
 
 export const PAIRING_LABELS = {
@@ -14,6 +15,17 @@ export const STATUS_LABELS = {
   open: "Aberto",
   in_progress: "Em andamento",
   finished: "Finalizado",
+} as const;
+
+export const GENDER_LABELS = {
+  MALE: "Masculino",
+  FEMALE: "Feminino",
+} as const;
+
+export const MIXED_PAIRING_LABELS = {
+  IGNORE: "Não considerar gênero",
+  PREFERRED: "Preferencialmente mistas",
+  REQUIRED: "Apenas mistas (obrigatório)",
 } as const;
 
 export function pairLabel(

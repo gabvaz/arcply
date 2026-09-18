@@ -18,6 +18,7 @@ enum PlayFormat {
   ROUND_ROBIN
   ROUND_ROBIN_MULTI
   BALANCED_QUEUE
+  RANDOM
 }
 
 enum PairingMode {
@@ -30,9 +31,21 @@ enum MatchStatus {
   completed
 }
 
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum MixedPairingPolicy {
+  IGNORE
+  PREFERRED
+  REQUIRED
+}
+
 model Player {
   id        String   @id @default(cuid())
   name      String
+  gender    Gender
   contact   String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -43,15 +56,16 @@ model Player {
 }
 
 model Play {
-  id          String      @id @default(cuid())
-  name        String
-  status      PlayStatus  @default(draft)
-  gamesToWin  Int         @default(0)
-  format      PlayFormat
-  rounds      Int         @default(1)
-  pairingMode PairingMode
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id           String              @id @default(cuid())
+  name         String
+  status       PlayStatus          @default(draft)
+  gamesToWin   Int                 @default(0)
+  format       PlayFormat
+  rounds       Int                 @default(1)
+  pairingMode  PairingMode
+  mixedPairing MixedPairingPolicy  @default(IGNORE)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
 
   entries PlayEntry[]
   pairs   Pair[]

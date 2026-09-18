@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { auth, signOut } from "@/lib/auth";
-import { Button } from "@/components/ui";
+import { PendingButton } from "@/components/pending-button";
 
 export async function SiteHeader() {
   const session = await auth();
@@ -42,9 +42,14 @@ export async function SiteHeader() {
                   await signOut({ redirectTo: "/" });
                 }}
               >
-                <Button type="submit" variant="ghost" className="!py-1.5 !px-2.5">
+                <PendingButton
+                  type="submit"
+                  variant="ghost"
+                  className="!py-1.5 !px-2.5"
+                  pendingLabel="Saindo…"
+                >
                   Sair
-                </Button>
+                </PendingButton>
               </form>
             </>
           ) : (

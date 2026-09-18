@@ -1,24 +1,31 @@
 import { prisma } from "@/lib/db";
 import { notFound } from "next/navigation";
-import { Suspense } from "react";
-import { RankingTable, MatchList } from "@/components/play-views";
-import { computeRanking } from "@/lib/ranking";
-import { FORMAT_LABELS, STATUS_LABELS } from "@/lib/labels";
+import {
+  RankingTable,
+  IndividualRankingTable,
+  MatchList,
+} from "@/components/play-views";
+import { computeRanking, computeIndividualRanking, mergeIndividualRoster } from "@/lib/ranking";
+import { FORMAT_LABELS, STATUS_LABELS, MIXED_PAIRING_LABELS } from "@/lib/labels";
 import { Badge, LinkButton, Stat } from "@/components/ui";
 import { PublicTabs } from "@/components/manage-tabs";
 import { auth } from "@/lib/auth";
 
 export default async function PublicPlayPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
   const { id } = await params;
+  const { tab } = await searchParams;
   const session = await auth();
 
   const play = await prisma.play.findUnique({
     where: { id },
     include: {
+      entries: { include: { player: true } },
       pairs: {
         include: { playerA: true, playerB: true },
         orderBy: { createdAt: "asc" },
@@ -34,7 +41,18 @@ export default async function PublicPlayPage({
   });
   if (!play) notFound();
 
-  const ranking = computeRanking(play.pairs, play.matches);
+  const isRandom = play.format === "RANDOM";
+  const pairRanking = computeRanking(play.pairs, play.matches);
+  const individualRoster = mergeIndividualRoster(
+    play.entries.map((e) => e.player),
+    play.pairs.flatMap((p) => [p.playerA, p.playerB]),
+  );
+  const individualRanking = computeIndividualRanking(
+    individualRoster,
+    play.pairs,
+    play.matches,
+  );
+  const rankingRows = isRandom ? individualRanking : pairRanking;
   const done = play.matches.filter((m) => m.status === "completed").length;
 
   return (
@@ -59,7 +77,10 @@ export default async function PublicPlayPage({
               </Badge>
             </div>
             <h1 className="font-display text-4xl font-bold sm:text-5xl">{play.name}</h1>
-            <p className="mt-2 text-sm text-ink-muted">{FORMAT_LABELS[play.format]}</p>
+            <p className="mt-2 text-sm text-ink-muted">
+              {FORMAT_LABELS[play.format]}
+              {isRandom ? ` · ${MIXED_PAIRING_LABELS[play.mixedPairing]}` : ""}
+            </p>
           </div>
           {session ? (
             <LinkButton href={`/admin/plays/${play.id}`} variant="secondary">
@@ -68,19 +89,27 @@ export default async function PublicPlayPage({
           ) : null}
         </div>
         <div className="grid grid-cols-3 gap-3">
-          <Stat label="Duplas" value={play.pairs.length} />
+          <Stat
+            label={isRandom ? "Jogadores" : "Duplas"}
+            value={isRandom ? play.entries.length : play.pairs.length}
+          />
           <Stat label="Jogos" value={play.matches.length} />
           <Stat label="OK" value={`${done}/${play.matches.length || 0}`} />
         </div>
       </div>
 
-      <Suspense fallback={<div className="surface h-12 animate-pulse rounded-2xl" />}>
-        <PublicTabs
-          counts={{ ranking: ranking.length, jogos: play.matches.length }}
-          ranking={<RankingTable rows={ranking} />}
-          jogos={<MatchList matches={play.matches} />}
-        />
-      </Suspense>
+      <PublicTabs
+        initialTab={tab}
+        counts={{ ranking: rankingRows.length, jogos: play.matches.length }}
+        ranking={
+          isRandom ? (
+            <IndividualRankingTable rows={individualRanking} />
+          ) : (
+            <RankingTable rows={pairRanking} />
+          )
+        }
+        jogos={<MatchList matches={play.matches} />}
+      />
     </div>
   );
 }

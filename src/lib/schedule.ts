@@ -142,12 +142,392 @@ export function generateBalancedPool(
  * Quantas partidas RR/MULTI devem existir entre um par de duplas.
  */
 export function requiredMeetings(
-  format: "ROUND_ROBIN" | "ROUND_ROBIN_MULTI" | "BALANCED_QUEUE",
+  format: "ROUND_ROBIN" | "ROUND_ROBIN_MULTI" | "BALANCED_QUEUE" | "RANDOM",
   playRounds: number,
 ): number {
-  if (format === "BALANCED_QUEUE") return 0;
+  if (format === "BALANCED_QUEUE" || format === "RANDOM") return 0;
   if (format === "ROUND_ROBIN_MULTI") return playRounds;
   return 1;
+}
+
+// ─── RANDOM (duplas por rodada) ─────────────────────────────────────────────
+
+export type PlayerHistory = {
+  partners: Map<string, Set<string>>;
+  opponents: Map<string, Set<string>>;
+  played: Map<string, number>;
+  byes: Map<string, number>;
+};
+
+export type RandomCourt = {
+  homeA: string;
+  homeB: string;
+  awayA: string;
+  awayB: string;
+};
+
+export type RandomRoundResult = {
+  courts: RandomCourt[];
+  byes: string[];
+  error?: string;
+};
+
+export type MixedPairingPolicy = "IGNORE" | "PREFERRED" | "REQUIRED";
+export type GenderCode = "MALE" | "FEMALE";
+
+const W_PARTNER = 100;
+const W_OPPONENT = 40;
+const W_PLAYED_IMBALANCE = 5;
+const W_SAME_GENDER = 80;
+
+const MIXED_REQUIRED_ERROR =
+  "Não é viável formar apenas duplas mistas com o elenco atual";
+
+function emptySetMap(): Map<string, Set<string>> {
+  return new Map();
+}
+
+function getSet(map: Map<string, Set<string>>, id: string): Set<string> {
+  let s = map.get(id);
+  if (!s) {
+    s = new Set();
+    map.set(id, s);
+  }
+  return s;
+}
+
+export function emptyPlayerHistory(playerIds: string[]): PlayerHistory {
+  const partners = emptySetMap();
+  const opponents = emptySetMap();
+  const played = new Map<string, number>();
+  const byes = new Map<string, number>();
+  for (const id of playerIds) {
+    partners.set(id, new Set());
+    opponents.set(id, new Set());
+    played.set(id, 0);
+    byes.set(id, 0);
+  }
+  return { partners, opponents, played, byes };
+}
+
+/** Constrói histórico a partir de matches completed (pairs com playerA/B). */
+export function buildPlayerHistory(
+  playerIds: string[],
+  completed: {
+    pairHome: { playerAId: string; playerBId: string };
+    pairAway: { playerAId: string; playerBId: string };
+  }[],
+): PlayerHistory {
+  const h = emptyPlayerHistory(playerIds);
+  for (const m of completed) {
+    const ha = m.pairHome.playerAId;
+    const hb = m.pairHome.playerBId;
+    const aa = m.pairAway.playerAId;
+    const ab = m.pairAway.playerBId;
+    const home = [ha, hb];
+    const away = [aa, ab];
+
+    getSet(h.partners, ha).add(hb);
+    getSet(h.partners, hb).add(ha);
+    getSet(h.partners, aa).add(ab);
+    getSet(h.partners, ab).add(aa);
+
+    for (const p of home) {
+      for (const o of away) getSet(h.opponents, p).add(o);
+      h.played.set(p, (h.played.get(p) ?? 0) + 1);
+    }
+    for (const p of away) {
+      for (const o of home) getSet(h.opponents, p).add(o);
+      h.played.set(p, (h.played.get(p) ?? 0) + 1);
+    }
+  }
+  return h;
+}
+
+function shuffleInPlace<T>(arr: T[]): void {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+/** 3 formas de 2×2 a partir de 4 jogadores [a,b,c,d]. */
+function pairingsOf4(
+  a: string,
+  b: string,
+  c: string,
+  d: string,
+): RandomCourt[] {
+  return [
+    { homeA: a, homeB: b, awayA: c, awayB: d },
+    { homeA: a, homeB: c, awayA: b, awayB: d },
+    { homeA: a, homeB: d, awayA: b, awayB: c },
+  ];
+}
+
+function isMixedPair(
+  a: string,
+  b: string,
+  genderByPlayer: Map<string, GenderCode>,
+): boolean {
+  const ga = genderByPlayer.get(a);
+  const gb = genderByPlayer.get(b);
+  return ga != null && gb != null && ga !== gb;
+}
+
+function isFullyMixedCourt(
+  court: RandomCourt,
+  genderByPlayer: Map<string, GenderCode>,
+): boolean {
+  return (
+    isMixedPair(court.homeA, court.homeB, genderByPlayer) &&
+    isMixedPair(court.awayA, court.awayB, genderByPlayer)
+  );
+}
+
+function courtCost(
+  court: RandomCourt,
+  h: PlayerHistory,
+  genderByPlayer?: Map<string, GenderCode>,
+  preferMixed?: boolean,
+): number {
+  let cost = 0;
+  const { homeA, homeB, awayA, awayB } = court;
+  if (h.partners.get(homeA)?.has(homeB)) cost += W_PARTNER;
+  if (h.partners.get(awayA)?.has(awayB)) cost += W_PARTNER;
+  for (const p of [homeA, homeB]) {
+    for (const o of [awayA, awayB]) {
+      if (h.opponents.get(p)?.has(o)) cost += W_OPPONENT;
+    }
+  }
+  const plays = [homeA, homeB, awayA, awayB].map((id) => h.played.get(id) ?? 0);
+  const maxP = Math.max(...plays);
+  const minP = Math.min(...plays);
+  cost += (maxP - minP) * W_PLAYED_IMBALANCE;
+
+  if (preferMixed && genderByPlayer) {
+    if (!isMixedPair(homeA, homeB, genderByPlayer)) cost += W_SAME_GENDER;
+    if (!isMixedPair(awayA, awayB, genderByPlayer)) cost += W_SAME_GENDER;
+  }
+  return cost;
+}
+
+function bestCourtForGroup(
+  group: [string, string, string, string],
+  h: PlayerHistory,
+  opts?: {
+    genderByPlayer?: Map<string, GenderCode>;
+    preferMixed?: boolean;
+    requireMixed?: boolean;
+  },
+): { court: RandomCourt; cost: number } | null {
+  let best: RandomCourt | null = null;
+  let bestCost = Infinity;
+  for (const court of pairingsOf4(group[0], group[1], group[2], group[3])) {
+    if (
+      opts?.requireMixed &&
+      opts.genderByPlayer &&
+      !isFullyMixedCourt(court, opts.genderByPlayer)
+    ) {
+      continue;
+    }
+    const c = courtCost(
+      court,
+      h,
+      opts?.genderByPlayer,
+      opts?.preferMixed,
+    );
+    if (c < bestCost) {
+      bestCost = c;
+      best = court;
+    }
+  }
+  if (!best) return null;
+  return { court: best, cost: bestCost };
+}
+
+function sitOutRank(a: string, b: string, h: PlayerHistory): number {
+  const playedDiff = (h.played.get(b) ?? 0) - (h.played.get(a) ?? 0);
+  if (playedDiff !== 0) return playedDiff;
+  return (h.byes.get(a) ?? 0) - (h.byes.get(b) ?? 0);
+}
+
+function pickSitOuts(playerIds: string[], h: PlayerHistory, count: number): string[] {
+  if (count <= 0) return [];
+  const ranked = [...playerIds].sort((a, b) => sitOutRank(a, b, h));
+  return ranked.slice(0, count);
+}
+
+/** Sitouts para REQUIRED: deixar 2M+2F por court; falha se maxCourts=0 com n≥4. */
+function pickRequiredMixedActive(
+  playerIds: string[],
+  h: PlayerHistory,
+  genderByPlayer: Map<string, GenderCode>,
+): { active: string[]; byes: string[] } | { error: string } {
+  const males = playerIds.filter((id) => genderByPlayer.get(id) === "MALE");
+  const females = playerIds.filter((id) => genderByPlayer.get(id) === "FEMALE");
+  const maxCourts = Math.min(
+    Math.floor(males.length / 2),
+    Math.floor(females.length / 2),
+    Math.floor(playerIds.length / 4),
+  );
+
+  if (maxCourts === 0) {
+    if (playerIds.length < 4) {
+      return { active: [], byes: [...playerIds] };
+    }
+    return { error: MIXED_REQUIRED_ERROR };
+  }
+
+  const needM = 2 * maxCourts;
+  const needF = 2 * maxCourts;
+  const sitM = [...males].sort((a, b) => sitOutRank(a, b, h)).slice(needM);
+  const sitF = [...females].sort((a, b) => sitOutRank(a, b, h)).slice(needF);
+  const byes = [...sitM, ...sitF];
+  const byeSet = new Set(byes);
+  const active = playerIds.filter((id) => !byeSet.has(id));
+  return { active, byes };
+}
+
+function generateRequiredMixedRound(
+  playerIds: string[],
+  history: PlayerHistory,
+  genderByPlayer: Map<string, GenderCode>,
+  trials: number,
+): RandomRoundResult {
+  const picked = pickRequiredMixedActive(playerIds, history, genderByPlayer);
+  if ("error" in picked) return { courts: [], byes: [], error: picked.error };
+
+  const { active, byes } = picked;
+  if (active.length < 4) {
+    return { courts: [], byes: [...playerIds], error: MIXED_REQUIRED_ERROR };
+  }
+
+  const males = active.filter((id) => genderByPlayer.get(id) === "MALE");
+  const females = active.filter((id) => genderByPlayer.get(id) === "FEMALE");
+
+  let bestCourts: RandomCourt[] = [];
+  let bestCost = Infinity;
+  let found = false;
+
+  for (let t = 0; t < trials; t++) {
+    const mShuf = [...males];
+    const fShuf = [...females];
+    shuffleInPlace(mShuf);
+    shuffleInPlace(fShuf);
+
+    // Zip into mixed pairs, then pair pairs into courts
+    type MixedPair = [string, string];
+    const pairs: MixedPair[] = mShuf.map((m, i) => [m, fShuf[i]!]);
+    shuffleInPlace(pairs);
+
+    const courts: RandomCourt[] = [];
+    let total = 0;
+    let ok = true;
+    for (let i = 0; i < pairs.length; i += 2) {
+      const [hA, hB] = pairs[i]!;
+      const [aA, aB] = pairs[i + 1]!;
+      // Two orientations: which pair is home
+      const candidates: RandomCourt[] = [
+        { homeA: hA, homeB: hB, awayA: aA, awayB: aB },
+        { homeA: aA, homeB: aB, awayA: hA, awayB: hB },
+      ];
+      let bestLocal: RandomCourt | null = null;
+      let bestLocalCost = Infinity;
+      for (const court of candidates) {
+        const c = courtCost(court, history, genderByPlayer, false);
+        if (c < bestLocalCost) {
+          bestLocalCost = c;
+          bestLocal = court;
+        }
+      }
+      if (!bestLocal) {
+        ok = false;
+        break;
+      }
+      courts.push(bestLocal);
+      total += bestLocalCost;
+    }
+    if (!ok) continue;
+    found = true;
+    if (total < bestCost) {
+      bestCost = total;
+      bestCourts = courts;
+    }
+  }
+
+  if (!found || !bestCourts.length) {
+    return { courts: [], byes, error: MIXED_REQUIRED_ERROR };
+  }
+  return { courts: bestCourts, byes };
+}
+
+/**
+ * Gera uma rodada: sit-outs se n%4≠0, depois best-of-N shuffles
+ * priorizando parceiros/adversários novos (e gênero conforme policy).
+ */
+export function generateRandomRound(
+  playerIds: string[],
+  history: PlayerHistory,
+  opts?: {
+    trials?: number;
+    genderByPlayer?: Map<string, GenderCode>;
+    mixedPairing?: MixedPairingPolicy;
+  },
+): RandomRoundResult {
+  if (playerIds.length < 4) {
+    return { courts: [], byes: [...playerIds] };
+  }
+
+  const policy = opts?.mixedPairing ?? "IGNORE";
+  const genderByPlayer = opts?.genderByPlayer ?? new Map();
+  const trials =
+    opts?.trials ??
+    (history.played.size === 0 ||
+    [...history.played.values()].every((v) => v === 0)
+      ? 1
+      : 300);
+
+  if (policy === "REQUIRED") {
+    return generateRequiredMixedRound(
+      playerIds,
+      history,
+      genderByPlayer,
+      Math.max(trials, 50),
+    );
+  }
+
+  const sitCount = playerIds.length % 4;
+  const byes = pickSitOuts(playerIds, history, sitCount);
+  const byeSet = new Set(byes);
+  const active = playerIds.filter((id) => !byeSet.has(id));
+  const preferMixed = policy === "PREFERRED";
+
+  let bestCourts: RandomCourt[] = [];
+  let bestCost = Infinity;
+
+  for (let t = 0; t < trials; t++) {
+    const shuffled = [...active];
+    shuffleInPlace(shuffled);
+    const courts: RandomCourt[] = [];
+    let total = 0;
+    for (let i = 0; i < shuffled.length; i += 4) {
+      const group = shuffled.slice(i, i + 4) as [string, string, string, string];
+      const picked = bestCourtForGroup(group, history, {
+        genderByPlayer,
+        preferMixed,
+      });
+      if (!picked) continue;
+      courts.push(picked.court);
+      total += picked.cost;
+    }
+    if (courts.length === active.length / 4 && total < bestCost) {
+      bestCost = total;
+      bestCourts = courts;
+    }
+  }
+
+  return { courts: bestCourts, byes };
 }
 
 /**
@@ -158,7 +538,7 @@ export function fixturesForNewPair(opts: {
   newPairId: string;
   activeOthers: PairRef[];
   existing: ExistingMatch[];
-  format: "ROUND_ROBIN" | "ROUND_ROBIN_MULTI" | "BALANCED_QUEUE";
+  format: "ROUND_ROBIN" | "ROUND_ROBIN_MULTI" | "BALANCED_QUEUE" | "RANDOM";
   playRounds: number;
   startOrderIndex: number;
   startRound: number;

@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui";
+import { Spinner } from "@/components/pending-button";
 import { recordScore, clearScore } from "@/lib/actions/plays";
 
 function Stepper({
@@ -101,13 +102,21 @@ export function ScoreForm({
           type="button"
           variant="ghost"
           disabled={pending}
+          aria-busy={pending}
           onClick={() =>
             start(async () => {
               await clearScore(playId, matchId);
             })
           }
         >
-          Editar
+          {pending ? (
+            <>
+              <Spinner />
+              …
+            </>
+          ) : (
+            "Editar"
+          )}
         </Button>
       </div>
     );
@@ -158,9 +167,17 @@ export function ScoreForm({
           type="button"
           disabled={pending || tied}
           variant="accent"
+          aria-busy={pending}
           onClick={submit}
         >
-          Confirmar placar
+          {pending ? (
+            <>
+              <Spinner />
+              Salvando…
+            </>
+          ) : (
+            "Confirmar placar"
+          )}
         </Button>
       </div>
       {error ? <p className="text-sm font-medium text-coral">{error}</p> : null}
