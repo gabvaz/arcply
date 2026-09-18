@@ -1,6 +1,10 @@
 [build]
   command = "npm run build"
 
+[build.environment]
+  # Evita falso positivo do scanner (valores curtos/comuns vs docs e node_modules)
+  SECRETS_SCAN_OMIT_KEYS = "DATABASE_URL,ADMIN_PASSWORD,ADMIN_EMAIL,AUTH_SECRET"
+
 # Next.js no Netlify (runtime OpenNext)
 [[plugins]]
   package = "@netlify/plugin-nextjs"

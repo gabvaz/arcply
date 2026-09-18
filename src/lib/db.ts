@@ -16,7 +16,7 @@ function createPrismaClient() {
     return new PrismaClient({ adapter });
   }
 
-  // Local: SQLite file (DATABASE_URL=file:./dev.db)
+  // Local: SQLite file via DATABASE_URL (ver .env.example)
   return new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });

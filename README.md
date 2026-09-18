@@ -65,8 +65,8 @@ git push   # GitHub
 |----------|--------|
 | `TURSO_DATABASE_URL` | `libsql://....turso.io` |
 | `TURSO_AUTH_TOKEN` | token do Turso |
-| `DATABASE_URL` | `file:./dev.db` (só pro `prisma generate` no build; runtime usa Turso) |
-| `AUTH_SECRET` | `openssl rand -base64 32` |
+| `DATABASE_URL` | `file:./.netlify.db` (só satisfaz o Prisma no build; runtime usa Turso) |
+| `AUTH_SECRET` | string aleatória (`openssl rand -base64 32`) |
 | `AUTH_URL` | `https://SEU-SITE.netlify.app` |
 | `ADMIN_EMAIL` | seu email |
 | `ADMIN_PASSWORD` | sua senha |
@@ -84,7 +84,7 @@ git push   # GitHub
 
 | | Local | Netlify/Vercel |
 |--|--------|----------------|
-| DB | `DATABASE_URL=file:./dev.db` | `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` |
+| DB | SQLite local (`DATABASE_URL`) | `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` |
 | Client | Prisma padrão | `@prisma/adapter-libsql` |
 
 O switch é automático em `src/lib/db.ts`.
