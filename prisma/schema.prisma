@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum PlayStatus {
+  draft
+  open
+  in_progress
+  finished
+}
+
+enum PlayFormat {
+  ROUND_ROBIN
+  ROUND_ROBIN_MULTI
+  BALANCED_QUEUE
+}
+
+enum PairingMode {
+  PLAYER_CHOICE
+  ADMIN_ASSIGN
+}
+
+enum MatchStatus {
+  pending
+  completed
+}
+
+model Player {
+  id        String   @id @default(cuid())
+  name      String
+  contact   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entries  PlayEntry[]
+  pairsAsA Pair[]      @relation("PairPlayerA")
+  pairsAsB Pair[]      @relation("PairPlayerB")
+}
+
+model Play {
+  id          String      @id @default(cuid())
+  name        String
+  status      PlayStatus  @default(draft)
+  gamesToWin  Int         @default(0)
+  format      PlayFormat
+  rounds      Int         @default(1)
+  pairingMode PairingMode
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  entries PlayEntry[]
+  pairs   Pair[]
+  matches Match[]
+}
+
+model PlayEntry {
+  id       String @id @default(cuid())
+  playId   String
+  playerId String
+
+  play   Play   @relation(fields: [playId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playId, playerId])
+}
+
+model Pair {
+  id          String    @id @default(cuid())
+  playId      String
+  playerAId   String
+  playerBId   String
+  label       String?
+  withdrawnAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  play        Play    @relation(fields: [playId], references: [id], onDelete: Cascade)
+  playerA     Player  @relation("PairPlayerA", fields: [playerAId], references: [id])
+  playerB     Player  @relation("PairPlayerB", fields: [playerBId], references: [id])
+  homeMatches Match[] @relation("HomePair")
+  awayMatches Match[] @relation("AwayPair")
+
+  @@index([playId, withdrawnAt])
+}
+
+model Match {
+  id            String      @id @default(cuid())
+  playId        String
+  pairHomeId    String
+  pairAwayId    String
+  gamesHome     Int?
+  gamesAway     Int?
+  status        MatchStatus @default(pending)
+  scoreOverride Boolean     @default(false)
+  round         Int         @default(1)
+  orderIndex    Int         @default(0)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  play     Play @relation(fields: [playId], references: [id], onDelete: Cascade)
+  pairHome Pair @relation("HomePair", fields: [pairHomeId], references: [id])
+  pairAway Pair @relation("AwayPair", fields: [pairAwayId], references: [id])
+
+  @@index([playId, round])
+}

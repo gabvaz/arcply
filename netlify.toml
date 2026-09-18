@@ -1,0 +1,6 @@
+[build]
+  command = "npm run build"
+
+# Next.js no Netlify (runtime OpenNext)
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
