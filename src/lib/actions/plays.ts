@@ -333,16 +333,16 @@ async function persistRandomRound(
     players.map((p) => [p.id, p.gender as "MALE" | "FEMALE"]),
   );
 
-  const completed = await prisma.match.findMany({
-    where: { playId, status: "completed" },
+  const allMatches = await prisma.match.findMany({
+    where: { playId },
     include: { pairHome: true, pairAway: true },
   });
 
-  const history = buildPlayerHistory(playerIds, completed);
+  const history = buildPlayerHistory(playerIds, allMatches);
 
-  // BYEs: quem não jogou em cada rodada completa
+  // BYEs: quem não entrou em cada rodada já gerada (completa ou não)
   const byRound = new Map<number, Set<string>>();
-  for (const m of completed) {
+  for (const m of allMatches) {
     const set = byRound.get(m.round) ?? new Set();
     set.add(m.pairHome.playerAId);
     set.add(m.pairHome.playerBId);

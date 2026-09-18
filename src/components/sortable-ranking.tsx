@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import type { RankingRow, IndividualRankingRow } from "@/lib/ranking";
 
 type SortKey =
@@ -198,7 +199,13 @@ export function RankingTable({ rows }: { rows: RankingRow[] }) {
   );
 }
 
-export function IndividualRankingTable({ rows }: { rows: IndividualRankingRow[] }) {
+export function IndividualRankingTable({
+  rows,
+  playId,
+}: {
+  rows: IndividualRankingRow[];
+  playId?: string;
+}) {
   const [genderFilter, setGenderFilter] = useState<"ALL" | "MALE" | "FEMALE">("ALL");
   const filtered = useMemo(() => {
     if (genderFilter === "ALL") return rows;
@@ -277,7 +284,16 @@ export function IndividualRankingTable({ rows }: { rows: IndividualRankingRow[] 
                         <RankCell rank={rank} highlight={rank === 1} />
                       </td>
                       <td className="px-4 py-3.5">
-                        <span className="font-semibold">{r.label}</span>
+                        {playId ? (
+                          <Link
+                            href={`/plays/${playId}/players/${r.playerId}`}
+                            className="font-semibold hover:text-mint-deep hover:underline"
+                          >
+                            {r.label}
+                          </Link>
+                        ) : (
+                          <span className="font-semibold">{r.label}</span>
+                        )}
                         <span className="ml-2 text-[10px] font-semibold uppercase text-ink-muted">
                           {r.gender === "MALE" ? "M" : "F"}
                         </span>

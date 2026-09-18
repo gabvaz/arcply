@@ -177,7 +177,9 @@ export type GenderCode = "MALE" | "FEMALE";
 
 const W_PARTNER = 100;
 const W_OPPONENT = 40;
-const W_PLAYED_IMBALANCE = 5;
+/** Prioriza equalizar jogos agendados (completed + pending). */
+const W_PLAYED_IMBALANCE = 50;
+const W_ROUND_BALANCE = 200;
 const W_SAME_GENDER = 80;
 
 const MIXED_REQUIRED_ERROR =
@@ -210,16 +212,16 @@ export function emptyPlayerHistory(playerIds: string[]): PlayerHistory {
   return { partners, opponents, played, byes };
 }
 
-/** Constrói histórico a partir de matches completed (pairs com playerA/B). */
+/** Histórico: `played` = jogos agendados (completed + pending). Partners/opponents de todos. */
 export function buildPlayerHistory(
   playerIds: string[],
-  completed: {
+  matches: {
     pairHome: { playerAId: string; playerBId: string };
     pairAway: { playerAId: string; playerBId: string };
   }[],
 ): PlayerHistory {
   const h = emptyPlayerHistory(playerIds);
-  for (const m of completed) {
+  for (const m of matches) {
     const ha = m.pairHome.playerAId;
     const hb = m.pairHome.playerBId;
     const aa = m.pairAway.playerAId;
@@ -347,9 +349,39 @@ function bestCourtForGroup(
 }
 
 function sitOutRank(a: string, b: string, h: PlayerHistory): number {
+  // Mais jogos agendados → senta primeiro
   const playedDiff = (h.played.get(b) ?? 0) - (h.played.get(a) ?? 0);
   if (playedDiff !== 0) return playedDiff;
+  // Menos byes → senta primeiro (ainda não descansou)
   return (h.byes.get(a) ?? 0) - (h.byes.get(b) ?? 0);
+}
+
+/** Custo global: após esta rodada, quão desigual fica o total de jogos. */
+function roundBalanceCost(
+  playerIds: string[],
+  h: PlayerHistory,
+  courts: RandomCourt[],
+  byes: string[],
+): number {
+  const projected = new Map<string, number>();
+  for (const id of playerIds) {
+    projected.set(id, h.played.get(id) ?? 0);
+  }
+  for (const court of courts) {
+    for (const id of [court.homeA, court.homeB, court.awayA, court.awayB]) {
+      projected.set(id, (projected.get(id) ?? 0) + 1);
+    }
+  }
+  // byes stay at current played
+  void byes;
+
+  const values = playerIds.map((id) => projected.get(id) ?? 0);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  // Soma dos desvios ao mínimo + spread max-min (penaliza gap)
+  let sumDev = 0;
+  for (const v of values) sumDev += v - min;
+  return sumDev * W_ROUND_BALANCE + (max - min) * W_ROUND_BALANCE * 2;
 }
 
 function pickSitOuts(playerIds: string[], h: PlayerHistory, count: number): string[] {
@@ -422,12 +454,10 @@ function generateRequiredMixedRound(
     shuffleInPlace(pairs);
 
     const courts: RandomCourt[] = [];
-    let total = 0;
     let ok = true;
     for (let i = 0; i < pairs.length; i += 2) {
       const [hA, hB] = pairs[i]!;
       const [aA, aB] = pairs[i + 1]!;
-      // Two orientations: which pair is home
       const candidates: RandomCourt[] = [
         { homeA: hA, homeB: hB, awayA: aA, awayB: aB },
         { homeA: aA, homeB: aB, awayA: hA, awayB: hB },
@@ -446,10 +476,14 @@ function generateRequiredMixedRound(
         break;
       }
       courts.push(bestLocal);
-      total += bestLocalCost;
     }
     if (!ok) continue;
     found = true;
+    const total =
+      courts.reduce(
+        (acc, court) => acc + courtCost(court, history, genderByPlayer, false),
+        0,
+      ) + roundBalanceCost(playerIds, history, courts, byes);
     if (total < bestCost) {
       bestCost = total;
       bestCourts = courts;
@@ -510,7 +544,7 @@ export function generateRandomRound(
     const shuffled = [...active];
     shuffleInPlace(shuffled);
     const courts: RandomCourt[] = [];
-    let total = 0;
+    let courtTotal = 0;
     for (let i = 0; i < shuffled.length; i += 4) {
       const group = shuffled.slice(i, i + 4) as [string, string, string, string];
       const picked = bestCourtForGroup(group, history, {
@@ -519,9 +553,12 @@ export function generateRandomRound(
       });
       if (!picked) continue;
       courts.push(picked.court);
-      total += picked.cost;
+      courtTotal += picked.cost;
     }
-    if (courts.length === active.length / 4 && total < bestCost) {
+    if (courts.length !== active.length / 4) continue;
+    const total =
+      courtTotal + roundBalanceCost(playerIds, history, courts, byes);
+    if (total < bestCost) {
       bestCost = total;
       bestCourts = courts;
     }

@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { LinkButton, Badge, Stat } from "@/components/ui";
 import { PendingButton, PendingIconButton } from "@/components/pending-button";
 import { AddPlayersForm } from "@/components/add-players-form";
@@ -131,7 +132,12 @@ export default async function ManagePlayPage({
                 key={e.id}
                 className="inline-flex items-center gap-2 rounded-full border border-line bg-white py-1.5 pl-3 pr-1.5 text-sm font-medium"
               >
-                {e.player.name}
+                <Link
+                  href={`/plays/${play.id}/players/${e.playerId}`}
+                  className="hover:text-mint-deep hover:underline"
+                >
+                  {e.player.name}
+                </Link>
                 <span className="text-[10px] font-semibold uppercase text-ink-muted">
                   {e.player.gender === "MALE" ? "M" : "F"}
                 </span>
@@ -308,7 +314,7 @@ export default async function ManagePlayPage({
           : "Ativas primeiro. Duplas que saíram ficam marcadas e mantêm o histórico."}
       </p>
       {isRandom ? (
-        <IndividualRankingTable rows={individualRanking} />
+        <IndividualRankingTable rows={individualRanking} playId={play.id} />
       ) : (
         <RankingTable rows={pairRanking} />
       )}

@@ -103,7 +103,7 @@ export default async function PublicPlayPage({
         counts={{ ranking: rankingRows.length, jogos: play.matches.length }}
         ranking={
           isRandom ? (
-            <IndividualRankingTable rows={individualRanking} />
+            <IndividualRankingTable rows={individualRanking} playId={play.id} />
           ) : (
             <RankingTable rows={pairRanking} />
           )
