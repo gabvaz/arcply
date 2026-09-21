@@ -2,7 +2,8 @@ export const FORMAT_LABELS = {
   ROUND_ROBIN: "Round-robin (todos contra todos)",
   ROUND_ROBIN_MULTI: "Round-robin × N rodadas",
   BALANCED_QUEUE: "Fila balanceada",
-  RANDOM: "Aleatório",
+  RANDOM: "Aleatório (1 jogo por vez)",
+  RANDOM_ROUNDS: "Aleatório × N rodadas",
 } as const;
 
 export const PAIRING_LABELS = {
@@ -26,6 +27,17 @@ export const MIXED_PAIRING_LABELS = {
   IGNORE: "Não considerar gênero",
   PREFERRED: "Preferencialmente mistas",
   REQUIRED: "Apenas mistas (obrigatório)",
+} as const;
+
+export const VARIETY_POLICY_LABELS = {
+  PREFER_NEW: "Preferir novos (permite rematch se preciso)",
+  STRICT: "Sem rematch (parceiro e adversário)",
+} as const;
+
+export const MATCH_STATUS_LABELS = {
+  pending: "Pendente",
+  in_progress: "Em andamento",
+  completed: "Finalizado",
 } as const;
 
 export function pairLabel(

@@ -21,6 +21,8 @@ export function RandomMatchLineupEditor({
   roster,
   initial,
   completed,
+  embedded = false,
+  onSaved,
 }: {
   playId: string;
   matchId: string;
@@ -32,8 +34,11 @@ export function RandomMatchLineupEditor({
     awayB: string;
   };
   completed: boolean;
+  /** Sem botão próprio — usado dentro do menu do card. */
+  embedded?: boolean;
+  onSaved?: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(embedded);
   const [lineup, setLineup] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -44,6 +49,87 @@ export function RandomMatchLineupEditor({
     lineup.homeB !== initial.homeB ||
     lineup.awayA !== initial.awayA ||
     lineup.awayB !== initial.awayB;
+
+  const editor = (
+    <div className={embedded ? "space-y-3" : "space-y-3 rounded-2xl border border-line bg-black/[0.02] p-3"}>
+      {completed ? (
+        <p className="text-xs text-ink-muted">
+          Jogo já finalizado — ao salvar, o placar volta a pendente.
+        </p>
+      ) : null}
+      <div className="grid gap-3">
+        {SLOTS.map((s) => (
+          <label key={s.key} className="block space-y-1.5">
+            <span className="text-[11px] font-semibold text-ink-muted">
+              {s.side} · {s.pos}
+            </span>
+            <Select
+              value={lineup[s.key]}
+              disabled={pending}
+              className="!py-3 text-base"
+              onChange={(e) =>
+                setLineup((prev) => ({ ...prev, [s.key]: e.target.value }))
+              }
+            >
+              {roster.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.gender ? ` (${p.gender === "MALE" ? "M" : "F"})` : ""}
+                </option>
+              ))}
+            </Select>
+          </label>
+        ))}
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Button
+          type="button"
+          variant="accent"
+          disabled={pending || !dirty}
+          aria-busy={pending}
+          className="w-full sm:w-auto"
+          onClick={() => {
+            setError(null);
+            start(async () => {
+              const res = await updateRandomMatchLineup(playId, matchId, lineup);
+              if (res?.error) setError(res.error);
+              else {
+                setOpen(false);
+                onSaved?.();
+                router.refresh();
+              }
+            });
+          }}
+        >
+          {pending ? (
+            <>
+              <Spinner />
+              Salvando…
+            </>
+          ) : (
+            "Salvar lineup"
+          )}
+        </Button>
+        {!embedded ? (
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={pending}
+            onClick={() => {
+              setLineup(initial);
+              setError(null);
+              setOpen(false);
+            }}
+          >
+            Cancelar
+          </Button>
+        ) : null}
+      </div>
+      {error ? <p className="text-sm font-medium text-coral">{error}</p> : null}
+    </div>
+  );
+
+  if (embedded) return editor;
 
   return (
     <div className="mb-3 space-y-3">
@@ -68,86 +154,7 @@ export function RandomMatchLineupEditor({
           {open ? "Fechar edição" : "Alterar jogadores"}
         </Button>
       </div>
-
-      {open ? (
-        <div className="space-y-3 rounded-2xl border border-line bg-black/[0.02] p-3">
-          {completed ? (
-            <p className="text-xs text-ink-muted">
-              Jogo já finalizado — ao salvar, o placar volta a pendente.
-            </p>
-          ) : null}
-          <div className="grid gap-2 sm:grid-cols-2">
-            {SLOTS.map((s) => (
-              <label key={s.key} className="block space-y-1">
-                <span className="text-[11px] font-semibold text-ink-muted">
-                  {s.side} · {s.pos}
-                </span>
-                <Select
-                  value={lineup[s.key]}
-                  disabled={pending}
-                  onChange={(e) =>
-                    setLineup((prev) => ({ ...prev, [s.key]: e.target.value }))
-                  }
-                >
-                  {roster.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                      {p.gender ? ` (${p.gender === "MALE" ? "M" : "F"})` : ""}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-            ))}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="accent"
-              disabled={pending || !dirty}
-              aria-busy={pending}
-              onClick={() => {
-                setError(null);
-                start(async () => {
-                  const res = await updateRandomMatchLineup(
-                    playId,
-                    matchId,
-                    lineup,
-                  );
-                  if (res?.error) setError(res.error);
-                  else {
-                    setOpen(false);
-                    router.refresh();
-                  }
-                });
-              }}
-            >
-              {pending ? (
-                <>
-                  <Spinner />
-                  Salvando…
-                </>
-              ) : (
-                "Salvar lineup"
-              )}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={pending}
-              onClick={() => {
-                setLineup(initial);
-                setError(null);
-                setOpen(false);
-              }}
-            >
-              Cancelar
-            </Button>
-          </div>
-          {error ? (
-            <p className="text-sm font-medium text-coral">{error}</p>
-          ) : null}
-        </div>
-      ) : null}
+      {open ? editor : null}
     </div>
   );
 }

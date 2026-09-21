@@ -9,14 +9,24 @@ import { useRouter } from "next/navigation";
 export function AddPlayersForm({
   playId,
   available,
+  maxSlots,
+  currentCount = 0,
 }: {
   playId: string;
   available: { id: string; name: string; gender?: "MALE" | "FEMALE" }[];
+  /** Capacidade planejada (RANDOM_ROUNDS). null/undefined = sem limite. */
+  maxSlots?: number | null;
+  currentCount?: number;
 }) {
   const [pending, start] = useTransition();
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+
+  const room =
+    maxSlots != null ? Math.max(0, maxSlots - currentCount) : Infinity;
+  const atCapacity = maxSlots != null && room <= 0;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -26,29 +36,42 @@ export function AddPlayersForm({
 
   const filteredIds = useMemo(() => filtered.map((p) => p.id), [filtered]);
   const allFilteredSelected =
-    filteredIds.length > 0 && filteredIds.every((id) => selected.has(id));
+    filteredIds.length > 0 &&
+    filteredIds.every((id) => selected.has(id));
   const someFilteredSelected =
     filteredIds.some((id) => selected.has(id)) && !allFilteredSelected;
 
   function toggle(id: string) {
+    if (atCapacity) return;
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+        return next;
+      }
+      if (next.size >= room) return prev;
+      next.add(id);
       return next;
     });
+    setError(null);
   }
 
   function toggleAllFiltered() {
+    if (atCapacity) return;
     setSelected((prev) => {
       const next = new Set(prev);
       if (allFilteredSelected) {
         for (const id of filteredIds) next.delete(id);
-      } else {
-        for (const id of filteredIds) next.add(id);
+        return next;
+      }
+      for (const id of filteredIds) {
+        if (next.has(id)) continue;
+        if (next.size >= room) break;
+        next.add(id);
       }
       return next;
     });
+    setError(null);
   }
 
   if (!available.length) {
@@ -59,10 +82,24 @@ export function AddPlayersForm({
     );
   }
 
+  if (atCapacity) {
+    return (
+      <p className="text-sm text-ink-muted">
+        Elenco cheio ({currentCount}/{maxSlots} vagas). Remova alguém para
+        adicionar.
+      </p>
+    );
+  }
+
   const count = selected.size;
 
   return (
     <div className="space-y-3">
+      {maxSlots != null ? (
+        <p className="text-xs font-semibold text-ink-muted">
+          Vagas: {currentCount}/{maxSlots} · cabem mais {room}
+        </p>
+      ) : null}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="relative min-w-0 flex-1">
           <input
@@ -124,20 +161,23 @@ export function AddPlayersForm({
         <div className="max-h-64 overflow-y-auto overscroll-contain p-1.5 sm:grid sm:grid-cols-2 sm:gap-0.5">
           {filtered.map((p) => {
             const isOn = selected.has(p.id);
+            const blocked = !isOn && count >= room;
             return (
               <label
                 key={p.id}
                 className={`flex cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm font-medium transition ${
                   isOn
                     ? "bg-mint-soft text-mint-deep"
-                    : "hover:bg-black/[0.03]"
+                    : blocked
+                      ? "cursor-not-allowed opacity-40"
+                      : "hover:bg-black/[0.03]"
                 }`}
               >
                 <input
                   type="checkbox"
                   checked={isOn}
                   onChange={() => toggle(p.id)}
-                  disabled={pending}
+                  disabled={pending || blocked}
                   className="size-4 shrink-0 accent-[var(--mint)]"
                 />
                 <span className="min-w-0 truncate">{p.name}</span>
@@ -157,15 +197,24 @@ export function AddPlayersForm({
         </div>
       </div>
 
+      {error ? (
+        <p className="text-sm font-medium text-coral">{error}</p>
+      ) : null}
+
       <Button
         type="button"
-        disabled={pending || count === 0}
+        disabled={pending || count === 0 || count > room}
         variant="accent"
         aria-busy={pending}
         onClick={() => {
           const ids = [...selected];
+          setError(null);
           start(async () => {
-            await addPlayersToPlay(playId, ids);
+            const res = await addPlayersToPlay(playId, ids);
+            if (res?.error) {
+              setError(res.error);
+              return;
+            }
             setSelected(new Set());
             setQuery("");
             router.refresh();

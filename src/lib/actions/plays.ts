@@ -6,9 +6,10 @@ import {
   buildPlayerHistory,
   fixturesForNewPair,
   generateBalancedPool,
-  generateRandomRound,
+  generateRandomMatch,
+  generateRandomRoundsSchedule,
+  probeStrictRandomRounds,
   generateRoundRobin,
-  groupMatchesIntoRounds,
   nextAvailableRound,
   nextBalancedMatch,
 } from "@/lib/schedule";
@@ -16,7 +17,14 @@ import { validateScore } from "@/lib/ranking";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import type { PlayFormat, PairingMode, MixedPairingPolicy, Prisma } from "@prisma/client";
+import { uniquePlaySlug } from "@/lib/slug";
+import type {
+  PlayFormat,
+  PairingMode,
+  MixedPairingPolicy,
+  VarietyPolicy,
+  Prisma,
+} from "@prisma/client";
 
 const playSchema = z.object({
   name: z.string().trim().min(1),
@@ -25,13 +33,20 @@ const playSchema = z.object({
     "ROUND_ROBIN_MULTI",
     "BALANCED_QUEUE",
     "RANDOM",
+    "RANDOM_ROUNDS",
   ]),
-  rounds: z.coerce.number().int().min(1).max(20).default(1),
+  rounds: z.coerce.number().int().min(1).max(40).default(1),
+  plannedPlayerCount: z.coerce.number().int().min(4).max(64).optional(),
   pairingMode: z.enum(["PLAYER_CHOICE", "ADMIN_ASSIGN"]).default("ADMIN_ASSIGN"),
   mixedPairing: z.enum(["IGNORE", "PREFERRED", "REQUIRED"]).default("IGNORE"),
+  varietyPolicy: z.enum(["PREFER_NEW", "STRICT"]).default("PREFER_NEW"),
 });
 
 const activePairWhere: Prisma.PairWhereInput = { withdrawnAt: null };
+
+function isIndividualFormat(format: string) {
+  return format === "RANDOM" || format === "RANDOM_ROUNDS";
+}
 
 export async function createPlay(formData: FormData) {
   await requireAdmin();
@@ -39,38 +54,98 @@ export async function createPlay(formData: FormData) {
     name: formData.get("name"),
     format: formData.get("format"),
     rounds: formData.get("rounds") || 1,
+    plannedPlayerCount: formData.get("plannedPlayerCount") || undefined,
     pairingMode: formData.get("pairingMode") || "ADMIN_ASSIGN",
     mixedPairing: formData.get("mixedPairing") || "IGNORE",
+    varietyPolicy: formData.get("varietyPolicy") || "PREFER_NEW",
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message };
+
+  const format = parsed.data.format;
+  if (format === "RANDOM_ROUNDS") {
+    if (!parsed.data.plannedPlayerCount) {
+      return { error: "Informe a quantidade de participantes" };
+    }
+    if (parsed.data.varietyPolicy === "STRICT") {
+      const probe = probeStrictRandomRounds(
+        parsed.data.plannedPlayerCount,
+        parsed.data.rounds,
+        { attempts: 16, trials: 500 },
+      );
+      if (!probe.ok) return { error: probe.error };
+    }
+  }
+
+  const slug = await uniquePlaySlug(parsed.data.name);
+  const individual = isIndividualFormat(format);
 
   const play = await prisma.play.create({
     data: {
       name: parsed.data.name,
+      slug,
       gamesToWin: 0,
-      format: parsed.data.format as PlayFormat,
+      format: format as PlayFormat,
       rounds:
-        parsed.data.format === "ROUND_ROBIN_MULTI" ? parsed.data.rounds : 1,
-      pairingMode:
-        parsed.data.format === "RANDOM"
-          ? "ADMIN_ASSIGN"
-          : (parsed.data.pairingMode as PairingMode),
-      mixedPairing:
-        parsed.data.format === "RANDOM"
-          ? (parsed.data.mixedPairing as MixedPairingPolicy)
-          : "IGNORE",
+        format === "ROUND_ROBIN_MULTI" || format === "RANDOM_ROUNDS"
+          ? parsed.data.rounds
+          : 1,
+      plannedPlayerCount:
+        format === "RANDOM_ROUNDS" ? parsed.data.plannedPlayerCount! : null,
+      pairingMode: individual
+        ? "ADMIN_ASSIGN"
+        : (parsed.data.pairingMode as PairingMode),
+      mixedPairing: individual
+        ? (parsed.data.mixedPairing as MixedPairingPolicy)
+        : "IGNORE",
+      varietyPolicy:
+        format === "RANDOM_ROUNDS"
+          ? (parsed.data.varietyPolicy as VarietyPolicy)
+          : "PREFER_NEW",
       status: "open",
     },
   });
 
-  redirect(`/admin/plays/${play.id}`);
+  redirect(`/admin/plays/${play.slug}`);
 }
 
 export async function addPlayersToPlay(playId: string, playerIds: string[]) {
   await requireAdmin();
   if (!playerIds.length) return { error: "Selecione jogadores" };
 
-  for (const playerId of playerIds) {
+  const play = await prisma.play.findUnique({
+    where: { id: playId },
+    select: {
+      plannedPlayerCount: true,
+      format: true,
+      _count: { select: { entries: true } },
+      entries: { select: { playerId: true } },
+    },
+  });
+  if (!play) return { error: "Play não encontrado" };
+
+  const uniqueIds = [...new Set(playerIds)];
+  const already = new Set(play.entries.map((e) => e.playerId));
+  const toAdd = uniqueIds.filter((id) => !already.has(id));
+
+  if (
+    play.format === "RANDOM_ROUNDS" &&
+    play.plannedPlayerCount != null &&
+    toAdd.length > 0
+  ) {
+    const room = play.plannedPlayerCount - play._count.entries;
+    if (room <= 0) {
+      return {
+        error: `Elenco cheio (${play.plannedPlayerCount} vagas)`,
+      };
+    }
+    if (toAdd.length > room) {
+      return {
+        error: `Só cabem mais ${room} de ${play.plannedPlayerCount} vagas (tentou +${toAdd.length})`,
+      };
+    }
+  }
+
+  for (const playerId of toAdd) {
     await prisma.playEntry.upsert({
       where: { playId_playerId: { playId, playerId } },
       create: { playId, playerId },
@@ -78,7 +153,7 @@ export async function addPlayersToPlay(playId: string, playerIds: string[]) {
     });
   }
 
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
@@ -88,20 +163,28 @@ export async function removePlayerFromPlay(playId: string, playerId: string) {
   const play = await prisma.play.findUnique({ where: { id: playId } });
   if (!play) return { error: "Play não encontrado" };
 
-  if (play.format === "RANDOM") {
-    const inPending = await prisma.match.findFirst({
+  if (play.format === "RANDOM_ROUNDS") {
+    const anyMatch = await prisma.match.findFirst({ where: { playId } });
+    if (anyMatch) {
+      return {
+        error:
+          "Já existem rodadas geradas — remova o chaveamento antes de tirar jogadores",
+      };
+    }
+  } else if (play.format === "RANDOM") {
+    const busy = await prisma.match.findFirst({
       where: {
         playId,
-        status: "pending",
+        status: { in: ["pending", "in_progress"] },
         OR: [
           { pairHome: { OR: [{ playerAId: playerId }, { playerBId: playerId }] } },
           { pairAway: { OR: [{ playerAId: playerId }, { playerBId: playerId }] } },
         ],
       },
     });
-    if (inPending) {
+    if (busy) {
       return {
-        error: "Jogador está em um jogo pendente — limpe ou finalize antes",
+        error: "Jogador está em um jogo ativo — finalize ou remova o jogo antes",
       };
     }
   } else {
@@ -118,7 +201,7 @@ export async function removePlayerFromPlay(playId: string, playerId: string) {
   }
 
   await prisma.playEntry.deleteMany({ where: { playId, playerId } });
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
@@ -133,7 +216,7 @@ export async function createPair(
 
   const play = await prisma.play.findUnique({ where: { id: playId } });
   if (!play) return { error: "Play não encontrado" };
-  if (play.format === "RANDOM") {
+  if (play.format === "RANDOM" || play.format === "RANDOM_ROUNDS") {
     return { error: "No formato aleatório as duplas são sorteadas automaticamente" };
   }
 
@@ -170,7 +253,7 @@ export async function createPair(
   // Mid-play: gera pendentes vs duplas ativas (RR/MULTI)
   await syncFixturesForNewPair(playId, pair.id);
 
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
@@ -211,7 +294,7 @@ export async function withdrawPair(playId: string, pairId: string) {
     }
   });
 
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
@@ -237,12 +320,11 @@ export async function generateMatches(playId: string) {
   }
 
   if (play.format === "RANDOM") {
-    return persistRandomRound(
-      playId,
-      play.entries.map((e) => e.playerId),
-      1,
-      true,
-    );
+    return generateNextRandomMatch(playId, { first: true });
+  }
+
+  if (play.format === "RANDOM_ROUNDS") {
+    return generateRandomRounds(playId);
   }
 
   if (play.pairs.length < 2) {
@@ -271,11 +353,14 @@ export async function generateMatches(playId: string) {
     data: { status: "in_progress" },
   });
 
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true, count: fixtures.length };
 }
 
-export async function generateNextRandomRound(playId: string) {
+export async function generateNextRandomMatch(
+  playId: string,
+  opts?: { first?: boolean },
+) {
   await requireAdmin();
   const play = await prisma.play.findUnique({
     where: { id: playId },
@@ -286,7 +371,7 @@ export async function generateNextRandomRound(playId: string) {
           pairHome: true,
           pairAway: true,
         },
-        orderBy: [{ round: "asc" }, { orderIndex: "asc" }],
+        orderBy: [{ orderIndex: "asc" }],
       },
     },
   });
@@ -294,36 +379,32 @@ export async function generateNextRandomRound(playId: string) {
   if (play.format !== "RANDOM") {
     return { error: "Só disponível no formato aleatório" };
   }
-  if (play.matches.length === 0) {
-    return { error: "Gere a primeira rodada antes" };
+  if (opts?.first && play.matches.length > 0) {
+    return { error: "Já existem jogos. Limpe a lista antes de regenerar." };
+  }
+  if (!opts?.first && play.matches.length === 0) {
+    return { error: "Gere o primeiro jogo antes" };
   }
 
-  const rounds = groupMatchesIntoRounds(play.matches);
-  const last = rounds[rounds.length - 1];
-  const nextRound = (last?.round ?? 0) + 1;
-  return persistRandomRound(
-    playId,
-    play.entries.map((e) => e.playerId),
-    nextRound,
-    false,
-  );
-}
-
-async function persistRandomRound(
-  playId: string,
-  playerIds: string[],
-  roundNum: number,
-  setInProgress: boolean,
-) {
+  const playerIds = play.entries.map((e) => e.playerId);
   if (playerIds.length < 4) {
     return { error: "Precisa de pelo menos 4 jogadores" };
   }
 
-  const play = await prisma.play.findUnique({
-    where: { id: playId },
-    select: { mixedPairing: true },
-  });
-  if (!play) return { error: "Play não encontrado" };
+  const busyIds = new Set<string>();
+  for (const m of play.matches) {
+    if (m.status !== "pending" && m.status !== "in_progress") continue;
+    busyIds.add(m.pairHome.playerAId);
+    busyIds.add(m.pairHome.playerBId);
+    busyIds.add(m.pairAway.playerAId);
+    busyIds.add(m.pairAway.playerBId);
+  }
+  const available = playerIds.filter((id) => !busyIds.has(id));
+  if (available.length < 4) {
+    return {
+      error: `Precisa de pelo menos 4 jogadores livres (${available.length} livres agora)`,
+    };
+  }
 
   const players = await prisma.player.findMany({
     where: { id: { in: playerIds } },
@@ -333,84 +414,204 @@ async function persistRandomRound(
     players.map((p) => [p.id, p.gender as "MALE" | "FEMALE"]),
   );
 
-  const allMatches = await prisma.match.findMany({
-    where: { playId },
-    include: { pairHome: true, pairAway: true },
-  });
-
-  const history = buildPlayerHistory(playerIds, allMatches);
-
-  // BYEs: quem não entrou em cada rodada já gerada (completa ou não)
-  const byRound = new Map<number, Set<string>>();
-  for (const m of allMatches) {
-    const set = byRound.get(m.round) ?? new Set();
-    set.add(m.pairHome.playerAId);
-    set.add(m.pairHome.playerBId);
-    set.add(m.pairAway.playerAId);
-    set.add(m.pairAway.playerBId);
-    byRound.set(m.round, set);
-  }
-  for (const [, inRound] of byRound) {
-    for (const id of playerIds) {
-      if (!inRound.has(id)) {
-        history.byes.set(id, (history.byes.get(id) ?? 0) + 1);
-      }
-    }
-  }
-
-  const result = generateRandomRound(playerIds, history, {
+  const history = buildPlayerHistory(playerIds, play.matches);
+  const result = generateRandomMatch(available, history, {
     genderByPlayer,
     mixedPairing: play.mixedPairing,
   });
   if (result.error) return { error: result.error };
-  if (!result.courts.length) {
-    return { error: "Não foi possível gerar a rodada" };
-  }
+  if (!result.court) return { error: "Não foi possível gerar o jogo" };
 
+  const court = result.court;
   const maxOrder = await prisma.match
     .aggregate({ where: { playId }, _max: { orderIndex: true } })
     .then((r) => r._max.orderIndex ?? -1);
 
-  let orderIndex = maxOrder + 1;
-  const created = await prisma.$transaction(async (tx) => {
-    const matchIds: string[] = [];
-    for (const court of result.courts) {
-      const home = await tx.pair.create({
-        data: {
-          playId,
-          playerAId: court.homeA,
-          playerBId: court.homeB,
-        },
-      });
-      const away = await tx.pair.create({
-        data: {
-          playId,
-          playerAId: court.awayA,
-          playerBId: court.awayB,
-        },
-      });
-      const match = await tx.match.create({
-        data: {
-          playId,
-          pairHomeId: home.id,
-          pairAwayId: away.id,
-          round: roundNum,
-          orderIndex: orderIndex++,
-        },
-      });
-      matchIds.push(match.id);
-    }
-    if (setInProgress) {
+  const match = await prisma.$transaction(async (tx) => {
+    const home = await tx.pair.create({
+      data: {
+        playId,
+        playerAId: court.homeA,
+        playerBId: court.homeB,
+      },
+    });
+    const away = await tx.pair.create({
+      data: {
+        playId,
+        playerAId: court.awayA,
+        playerBId: court.awayB,
+      },
+    });
+    const created = await tx.match.create({
+      data: {
+        playId,
+        pairHomeId: home.id,
+        pairAwayId: away.id,
+        round: 1,
+        orderIndex: maxOrder + 1,
+        status: "pending",
+      },
+    });
+    if (opts?.first || play.status === "open") {
       await tx.play.update({
         where: { id: playId },
         data: { status: "in_progress" },
       });
     }
-    return matchIds;
+    return created;
   });
 
-  revalidatePlay(playId);
-  return { ok: true, count: created.length, round: roundNum };
+  await revalidatePlay(playId);
+  return { ok: true, matchId: match.id };
+}
+
+/** @deprecated use generateNextRandomMatch — kept as alias for UI migrate */
+export async function generateNextRandomRound(playId: string) {
+  return generateNextRandomMatch(playId);
+}
+
+/** Gera todas as N rodadas do formato RANDOM_ROUNDS. */
+export async function generateRandomRounds(playId: string) {
+  await requireAdmin();
+  const play = await prisma.play.findUnique({
+    where: { id: playId },
+    include: {
+      entries: true,
+      matches: true,
+    },
+  });
+  if (!play) return { error: "Play não encontrado" };
+  if (play.format !== "RANDOM_ROUNDS") {
+    return { error: "Só disponível no formato Aleatório × N rodadas" };
+  }
+  if (play.matches.length > 0) {
+    return { error: "Já existem jogos. Use Regenerar se quiser refazer." };
+  }
+
+  const playerIds = play.entries.map((e) => e.playerId);
+  if (playerIds.length < 4) {
+    return { error: "Precisa de pelo menos 4 jogadores" };
+  }
+  if (
+    play.plannedPlayerCount != null &&
+    playerIds.length !== play.plannedPlayerCount
+  ) {
+    return {
+      error: `Planejado ${play.plannedPlayerCount} jogadores, há ${playerIds.length}. Ajuste o elenco.`,
+    };
+  }
+
+  const players = await prisma.player.findMany({
+    where: { id: { in: playerIds } },
+    select: { id: true, gender: true },
+  });
+  const genderByPlayer = new Map(
+    players.map((p) => [p.id, p.gender as "MALE" | "FEMALE"]),
+  );
+
+  let result = generateRandomRoundsSchedule(playerIds, play.rounds, {
+    genderByPlayer,
+    mixedPairing: play.mixedPairing,
+    varietyPolicy: play.varietyPolicy,
+  });
+  // STRICT é estocástico: algumas tentativas passam onde outras falham cedo
+  if (result.error && play.varietyPolicy === "STRICT") {
+    for (let a = 0; a < 15; a++) {
+      result = generateRandomRoundsSchedule(playerIds, play.rounds, {
+        genderByPlayer,
+        mixedPairing: play.mixedPairing,
+        varietyPolicy: "STRICT",
+      });
+      if (!result.error) break;
+    }
+  }
+  if (result.error) return { error: result.error };
+  if (!result.rounds?.length) return { error: "Não foi possível gerar as rodadas" };
+
+  const pairRows: {
+    id: string;
+    playId: string;
+    playerAId: string;
+    playerBId: string;
+  }[] = [];
+  const matchRows: {
+    playId: string;
+    pairHomeId: string;
+    pairAwayId: string;
+    round: number;
+    orderIndex: number;
+    status: "pending";
+  }[] = [];
+
+  let orderIndex = 0;
+  for (const round of result.rounds) {
+    for (const court of round.courts) {
+      const homeId = crypto.randomUUID();
+      const awayId = crypto.randomUUID();
+      pairRows.push({
+        id: homeId,
+        playId,
+        playerAId: court.homeA,
+        playerBId: court.homeB,
+      });
+      pairRows.push({
+        id: awayId,
+        playId,
+        playerAId: court.awayA,
+        playerBId: court.awayB,
+      });
+      matchRows.push({
+        playId,
+        pairHomeId: homeId,
+        pairAwayId: awayId,
+        round: round.round,
+        orderIndex: orderIndex++,
+        status: "pending",
+      });
+    }
+  }
+
+  await prisma.$transaction([
+    prisma.pair.createMany({ data: pairRows }),
+    prisma.match.createMany({ data: matchRows }),
+    prisma.play.update({
+      where: { id: playId },
+      data: { status: "in_progress" },
+    }),
+  ]);
+
+  await revalidatePlay(playId);
+  return { ok: true, rounds: play.rounds };
+}
+
+/** Apaga chaveamento RANDOM_ROUNDS se nenhum jogo saiu de pending. */
+export async function clearRandomRoundsSchedule(playId: string) {
+  await requireAdmin();
+  const play = await prisma.play.findUnique({
+    where: { id: playId },
+    include: { matches: true },
+  });
+  if (!play) return { error: "Play não encontrado" };
+  if (play.format !== "RANDOM_ROUNDS") {
+    return { error: "Só disponível no formato Aleatório × N rodadas" };
+  }
+  if (play.matches.some((m) => m.status !== "pending")) {
+    return {
+      error: "Há jogos em andamento ou finalizados — não dá para regenerar",
+    };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.match.deleteMany({ where: { playId } });
+    await tx.pair.deleteMany({ where: { playId } });
+    await tx.play.update({
+      where: { id: playId },
+      data: { status: "open" },
+    });
+  });
+
+  await revalidatePlay(playId);
+  return { ok: true };
 }
 
 export async function addNextBalancedMatch(playId: string) {
@@ -458,27 +659,69 @@ export async function addNextBalancedMatch(playId: string) {
     });
   }
 
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
-export async function clearMatches(playId: string) {
+/** Remove um jogo específico. Em RANDOM, apaga as duplas órfãs desse match. */
+export async function deleteMatch(playId: string, matchId: string) {
   await requireAdmin();
   const play = await prisma.play.findUnique({ where: { id: playId } });
   if (!play) return { error: "Play não encontrado" };
 
+  const match = await prisma.match.findFirst({
+    where: { id: matchId, playId },
+  });
+  if (!match) return { error: "Jogo não encontrado" };
+
+  const pairHomeId = match.pairHomeId;
+  const pairAwayId = match.pairAwayId;
+
   await prisma.$transaction(async (tx) => {
-    await tx.match.deleteMany({ where: { playId } });
-    if (play.format === "RANDOM") {
-      await tx.pair.deleteMany({ where: { playId } });
+    await tx.match.delete({ where: { id: matchId } });
+
+    if (play.format === "RANDOM" || play.format === "RANDOM_ROUNDS") {
+      const stillUsed = await tx.match.findMany({
+        where: { playId },
+        select: { pairHomeId: true, pairAwayId: true },
+      });
+      const used = new Set(
+        stillUsed.flatMap((m) => [m.pairHomeId, m.pairAwayId]),
+      );
+      for (const pairId of [pairHomeId, pairAwayId]) {
+        if (!used.has(pairId)) {
+          await tx.pair.delete({ where: { id: pairId } });
+        }
+      }
     }
-    await tx.play.update({
-      where: { id: playId },
-      data: { status: "open" },
-    });
+
+    const remaining = await tx.match.count({ where: { playId } });
+    if (remaining === 0 && play.status !== "finished") {
+      await tx.play.update({
+        where: { id: playId },
+        data: { status: "open" },
+      });
+    }
   });
 
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
+  return { ok: true };
+}
+
+export async function startMatch(playId: string, matchId: string) {
+  await requireAdmin();
+  const match = await prisma.match.findFirst({
+    where: { id: matchId, playId },
+  });
+  if (!match) return { error: "Jogo não encontrado" };
+  if (match.status !== "pending") {
+    return { error: "Só é possível iniciar um jogo pendente" };
+  }
+  await prisma.match.update({
+    where: { id: matchId },
+    data: { status: "in_progress" },
+  });
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
@@ -491,6 +734,18 @@ export async function recordScore(
   await requireAdmin();
   const play = await prisma.play.findUnique({ where: { id: playId } });
   if (!play) return { error: "Play não encontrado" };
+
+  const match = await prisma.match.findFirst({
+    where: { id: matchId, playId },
+  });
+  if (!match) return { error: "Jogo não encontrado" };
+
+  if (play.format === "RANDOM" && match.status !== "in_progress") {
+    return { error: "Inicie o jogo antes de registrar o placar" };
+  }
+  if (play.format !== "RANDOM" && match.status === "completed") {
+    // allow overwrite via clear first — keep previous behavior for non-random
+  }
 
   const err = validateScore(gamesHome, gamesAway);
   if (err) return { error: err };
@@ -505,7 +760,7 @@ export async function recordScore(
     },
   });
 
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
@@ -520,7 +775,7 @@ export async function clearScore(playId: string, matchId: string) {
       status: "pending",
     },
   });
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
@@ -566,6 +821,9 @@ export async function updateRandomMatchLineup(
     include: { pairHome: true, pairAway: true },
   });
   if (!match) return { error: "Jogo não encontrado" };
+  if (match.status !== "pending") {
+    return { error: "Só é possível alterar lineup de jogos pendentes" };
+  }
 
   const oldIds = [
     match.pairHome.playerAId,
@@ -574,14 +832,15 @@ export async function updateRandomMatchLineup(
     match.pairAway.playerBId,
   ];
 
-  const roundMatches = await prisma.match.findMany({
-    where: { playId, round: match.round },
+  // Swap with other pending matches only (sem rodadas)
+  const pendingMatches = await prisma.match.findMany({
+    where: { playId, status: "pending" },
     include: { pairHome: true, pairAway: true },
   });
 
   type Slot = { pairId: string; field: "playerAId" | "playerBId" };
   function findSlot(playerId: string, excludePairIds: Set<string>): Slot | null {
-    for (const m of roundMatches) {
+    for (const m of pendingMatches) {
       for (const pair of [m.pairHome, m.pairAway]) {
         if (excludePairIds.has(pair.id)) continue;
         if (pair.playerAId === playerId) {
@@ -599,7 +858,6 @@ export async function updateRandomMatchLineup(
   const leaving = oldIds.filter((id) => !newIds.includes(id));
   const arriving = newIds.filter((id) => !oldIds.includes(id));
 
-  // Pair each arriving (from another court / bye) with a leaving player for swap
   const swaps: { slot: Slot; playerId: string }[] = [];
   const leavingQueue = [...leaving];
 
@@ -615,7 +873,6 @@ export async function updateRandomMatchLineup(
       }
       swaps.push({ slot, playerId: replacement });
     }
-    // else: arriving was on bye — leaving becomes bye, nothing to write
   }
 
   await prisma.$transaction(async (tx) => {
@@ -633,20 +890,9 @@ export async function updateRandomMatchLineup(
       where: { id: match.pairAwayId },
       data: { playerAId: lineup.awayA, playerBId: lineup.awayB, label: null },
     });
-    if (match.status === "completed") {
-      await tx.match.update({
-        where: { id: matchId },
-        data: {
-          gamesHome: null,
-          gamesAway: null,
-          scoreOverride: false,
-          status: "pending",
-        },
-      });
-    }
   });
 
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
@@ -656,7 +902,7 @@ export async function finishPlay(playId: string) {
     where: { id: playId },
     data: { status: "finished" },
   });
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
@@ -666,7 +912,7 @@ export async function reopenPlay(playId: string) {
     where: { id: playId },
     data: { status: "in_progress" },
   });
-  revalidatePlay(playId);
+  await revalidatePlay(playId);
   return { ok: true };
 }
 
@@ -688,7 +934,7 @@ async function syncFixturesForNewPair(playId: string, newPairId: string) {
     },
   });
   if (!play) return;
-  if (play.format === "BALANCED_QUEUE" || play.format === "RANDOM") return;
+  if (play.format === "BALANCED_QUEUE" || play.format === "RANDOM" || play.format === "RANDOM_ROUNDS") return;
   // só sync se já há chaveamento / play em andamento
   if (play.matches.length === 0 && play.status === "open") return;
 
@@ -735,9 +981,15 @@ async function syncFixturesForNewPair(playId: string, newPairId: string) {
   }
 }
 
-function revalidatePlay(playId: string) {
-  revalidatePath(`/admin/plays/${playId}`);
-  revalidatePath(`/plays/${playId}`);
+async function revalidatePlay(playId: string) {
+  const play = await prisma.play.findUnique({
+    where: { id: playId },
+    select: { slug: true },
+  });
+  const key = play?.slug ?? playId;
+  revalidatePath(`/admin/plays/${key}`);
+  revalidatePath(`/plays/${key}`);
   revalidatePath("/admin");
   revalidatePath("/admin/plays");
+  revalidatePath("/");
 }

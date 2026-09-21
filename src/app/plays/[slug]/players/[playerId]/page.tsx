@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { mergeIndividualRoster } from "@/lib/ranking";
 import { computePlayerPlayProfile } from "@/lib/player-profile";
 import { PlayerProfileView } from "@/components/player-profile-view";
@@ -7,26 +7,29 @@ import { PlayerProfileView } from "@/components/player-profile-view";
 export default async function PlayerPlayProfilePage({
   params,
 }: {
-  params: Promise<{ id: string; playerId: string }>;
+  params: Promise<{ slug: string; playerId: string }>;
 }) {
-  const { id: playId, playerId } = await params;
+  const { slug, playerId } = await params;
 
-  const play = await prisma.play.findUnique({
-    where: { id: playId },
-    include: {
-      entries: { include: { player: true } },
-      pairs: {
-        include: { playerA: true, playerB: true },
-      },
-      matches: {
-        include: {
-          pairHome: true,
-          pairAway: true,
-        },
+  const include = {
+    entries: { include: { player: true } },
+    pairs: {
+      include: { playerA: true, playerB: true },
+    },
+    matches: {
+      include: {
+        pairHome: true,
+        pairAway: true,
       },
     },
-  });
-  if (!play) notFound();
+  };
+
+  let play = await prisma.play.findUnique({ where: { slug }, include });
+  if (!play) {
+    const byId = await prisma.play.findUnique({ where: { id: slug }, include });
+    if (byId) redirect(`/plays/${byId.slug}/players/${playerId}`);
+    notFound();
+  }
 
   const roster = mergeIndividualRoster(
     play.entries.map((e) => e.player),
@@ -43,7 +46,7 @@ export default async function PlayerPlayProfilePage({
 
   return (
     <PlayerProfileView
-      playId={play.id}
+      playId={play.slug}
       playName={play.name}
       profile={profile}
     />

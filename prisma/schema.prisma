@@ -19,6 +19,7 @@ enum PlayFormat {
   ROUND_ROBIN_MULTI
   BALANCED_QUEUE
   RANDOM
+  RANDOM_ROUNDS
 }
 
 enum PairingMode {
@@ -28,6 +29,7 @@ enum PairingMode {
 
 enum MatchStatus {
   pending
+  in_progress
   completed
 }
 
@@ -40,6 +42,11 @@ enum MixedPairingPolicy {
   IGNORE
   PREFERRED
   REQUIRED
+}
+
+enum VarietyPolicy {
+  PREFER_NEW
+  STRICT
 }
 
 model Player {
@@ -56,16 +63,19 @@ model Player {
 }
 
 model Play {
-  id           String              @id @default(cuid())
-  name         String
-  status       PlayStatus          @default(draft)
-  gamesToWin   Int                 @default(0)
-  format       PlayFormat
-  rounds       Int                 @default(1)
-  pairingMode  PairingMode
-  mixedPairing MixedPairingPolicy  @default(IGNORE)
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  id                 String              @id @default(cuid())
+  slug               String              @unique
+  name               String
+  status             PlayStatus          @default(draft)
+  gamesToWin         Int                 @default(0)
+  format             PlayFormat
+  rounds             Int                 @default(1)
+  plannedPlayerCount Int?
+  pairingMode        PairingMode
+  mixedPairing       MixedPairingPolicy  @default(IGNORE)
+  varietyPolicy      VarietyPolicy       @default(PREFER_NEW)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   entries PlayEntry[]
   pairs   Pair[]

@@ -20,10 +20,6 @@ export default async function HomePage() {
             Arco
             <span className="text-mint">play</span>
           </p>
-          <p className="text-base text-white/65 sm:text-lg">
-            Plays de beach tennis com ranking por duplas, jogos equilibrados e
-            placar na hora.
-          </p>
           <div className="flex flex-wrap gap-3 pt-1">
             {session ? (
               <>
@@ -68,7 +64,7 @@ export default async function HomePage() {
             {plays.map((p, i) => (
               <li key={p.id} className="animate-rise" style={{ animationDelay: `${i * 50}ms` }}>
                 <Link
-                  href={`/plays/${p.id}`}
+                  href={`/plays/${p.slug}`}
                   className="surface group flex h-full flex-col justify-between rounded-3xl p-5 transition duration-300 hover:-translate-y-0.5 hover:border-mint/40 hover:shadow-lg hover:shadow-mint/10"
                 >
                   <div>

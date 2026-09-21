@@ -32,7 +32,7 @@ export default async function PlaysListPage() {
               key={p.id}
               className="surface flex flex-wrap items-center justify-between gap-3 rounded-3xl p-4 sm:p-5"
             >
-              <Link href={`/admin/plays/${p.id}`} className="min-w-0 flex-1">
+              <Link href={`/admin/plays/${p.slug}`} className="min-w-0 flex-1">
                 <div className="mb-1.5 flex flex-wrap gap-2">
                   <Badge
                     tone={
@@ -54,7 +54,7 @@ export default async function PlaysListPage() {
                 </p>
               </Link>
               <div className="flex gap-2">
-                <LinkButton href={`/admin/plays/${p.id}`} variant="secondary">
+                <LinkButton href={`/admin/plays/${p.slug}`} variant="secondary">
                   Abrir
                 </LinkButton>
                 <DeletePlayButton playId={p.id} playName={p.name} compact />

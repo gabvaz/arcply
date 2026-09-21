@@ -1,6 +1,6 @@
 import { requireAdmin } from "@/lib/session";
 import { prisma } from "@/lib/db";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { LinkButton, Badge, Stat } from "@/components/ui";
 import { PendingButton, PendingIconButton } from "@/components/pending-button";
@@ -12,10 +12,9 @@ import {
   IndividualRankingTable,
   AdminMatchRounds,
 } from "@/components/play-views";
-import { ManageTabs } from "@/components/manage-tabs";
+import { ManageTabs, JogosSubTabs } from "@/components/manage-tabs";
 import { DeletePlayButton } from "@/components/delete-play-button";
 import { computeRanking, computeIndividualRanking, mergeIndividualRoster } from "@/lib/ranking";
-import { groupMatchesIntoRounds } from "@/lib/schedule";
 import {
   FORMAT_LABELS,
   PAIRING_LABELS,
@@ -24,12 +23,12 @@ import {
   pairLabel,
 } from "@/lib/labels";
 import {
-  clearMatches,
   finishPlay,
   addNextBalancedMatch,
   removePlayerFromPlay,
   reopenPlay,
   withdrawPair,
+  clearRandomRoundsSchedule,
 } from "@/lib/actions/plays";
 
 function statusTone(status: string): "live" | "done" | "neutral" | "warn" {
@@ -43,33 +42,38 @@ export default async function ManagePlayPage({
   params,
   searchParams,
 }: {
-  params: Promise<{ id: string }>;
+  params: Promise<{ slug: string }>;
   searchParams: Promise<{ tab?: string }>;
 }) {
   await requireAdmin();
-  const { id } = await params;
+  const { slug } = await params;
   const { tab } = await searchParams;
 
-  const play = await prisma.play.findUnique({
-    where: { id },
-    include: {
-      entries: { include: { player: true }, orderBy: { player: { name: "asc" } } },
-      pairs: {
-        include: { playerA: true, playerB: true },
-        orderBy: { createdAt: "asc" },
-      },
-      matches: {
-        include: {
-          pairHome: { include: { playerA: true, playerB: true } },
-          pairAway: { include: { playerA: true, playerB: true } },
-        },
-        orderBy: [{ round: "asc" }, { orderIndex: "asc" }],
-      },
+  const include = {
+    entries: { include: { player: true }, orderBy: { player: { name: "asc" as const } } },
+    pairs: {
+      include: { playerA: true, playerB: true },
+      orderBy: { createdAt: "asc" as const },
     },
-  });
-  if (!play) notFound();
+    matches: {
+      include: {
+        pairHome: { include: { playerA: true, playerB: true } },
+        pairAway: { include: { playerA: true, playerB: true } },
+      },
+      orderBy: [{ round: "asc" as const }, { orderIndex: "asc" as const }],
+    },
+  };
 
-  const isRandom = play.format === "RANDOM";
+  let play = await prisma.play.findUnique({ where: { slug }, include });
+  if (!play) {
+    const byId = await prisma.play.findUnique({ where: { id: slug }, include });
+    if (byId) redirect(`/admin/plays/${byId.slug}`);
+    notFound();
+  }
+
+  const isLiveRandom = play.format === "RANDOM";
+  const isRandomRounds = play.format === "RANDOM_ROUNDS";
+  const isIndividual = isLiveRandom || isRandomRounds;
   const activePairs = play.pairs.filter((p) => p.withdrawnAt == null);
   const withdrawnPairs = play.pairs.filter((p) => p.withdrawnAt != null);
 
@@ -93,13 +97,12 @@ export default async function ManagePlayPage({
     play.pairs,
     play.matches,
   );
-  const rankingCount = isRandom ? individualRanking.length : pairRanking.length;
+  const rankingCount = isIndividual ? individualRanking.length : pairRanking.length;
   const doneMatches = play.matches.filter((m) => m.status === "completed").length;
 
-  const rounds = groupMatchesIntoRounds(play.matches);
   const pendingPlayerIds = new Set(
     play.matches
-      .filter((m) => m.status === "pending")
+      .filter((m) => m.status === "pending" || m.status === "in_progress")
       .flatMap((m) => [
         m.pairHome.playerAId,
         m.pairHome.playerBId,
@@ -107,6 +110,9 @@ export default async function ManagePlayPage({
         m.pairAway.playerBId,
       ]),
   );
+  const freePlayers = isLiveRandom
+    ? play.entries.filter((e) => !pendingPlayerIds.has(e.playerId)).length
+    : 0;
 
   const participantes = (
     <div className="space-y-8">
@@ -114,26 +120,35 @@ export default async function ManagePlayPage({
         <div className="mb-4 flex items-baseline justify-between gap-2">
           <h3 className="font-display text-xl">Jogadores</h3>
           <span className="text-xs font-semibold text-ink-muted">
-            {play.entries.length} no play
+            {play.entries.length}
+            {isRandomRounds && play.plannedPlayerCount
+              ? ` / ${play.plannedPlayerCount} planejados`
+              : " no play"}
           </span>
         </div>
         <p className="mb-4 text-sm text-ink-muted">
-          {isRandom
-            ? "Pode adicionar ou tirar gente com o play em andamento. Removidos saem do sorteio mas ficam no ranking (e podem voltar). Novos entram na próxima rodada."
-            : "Pode adicionar gente no meio do play. Remover dupla libera os jogadores para nova combinação."}
+          {isLiveRandom
+            ? "Pode adicionar ou tirar gente com o play em andamento. Removidos saem do sorteio mas ficam no ranking (e podem voltar). Novos entram no próximo jogo gerado."
+            : isRandomRounds
+              ? play.matches.length
+                ? "Chaveamento já gerado — para mudar o elenco, regenere as rodadas (só se todos os jogos ainda estiverem pendentes)."
+                : `Adicione ${play.plannedPlayerCount ?? "≥4"} jogadores e gere as ${play.rounds} rodadas.`
+              : "Pode adicionar gente no meio do play. Remover dupla libera os jogadores para nova combinação."}
         </p>
         <ul className="mb-5 flex flex-wrap gap-2">
           {play.entries.map((e) => {
-            const busy = isRandom
+            const busy = isLiveRandom
               ? pendingPlayerIds.has(e.playerId)
-              : activePairedIds.has(e.playerId);
+              : isRandomRounds
+                ? play.matches.length > 0
+                : activePairedIds.has(e.playerId);
             return (
               <li
                 key={e.id}
                 className="inline-flex items-center gap-2 rounded-full border border-line bg-white py-1.5 pl-3 pr-1.5 text-sm font-medium"
               >
                 <Link
-                  href={`/plays/${play.id}/players/${e.playerId}`}
+                  href={`/plays/${play.slug}/players/${e.playerId}`}
                   className="hover:text-mint-deep hover:underline"
                 >
                   {e.player.name}
@@ -143,7 +158,7 @@ export default async function ManagePlayPage({
                 </span>
                 {busy ? (
                   <span className="pr-1.5 text-[10px] font-semibold uppercase text-mint-deep">
-                    {isRandom ? "jogo" : "dupla"}
+                    {isLiveRandom ? "jogo" : isRandomRounds ? "ok" : "dupla"}
                   </span>
                 ) : (
                   <form
@@ -167,10 +182,15 @@ export default async function ManagePlayPage({
             <li className="text-sm text-ink-muted">Nenhum jogador ainda</li>
           ) : null}
         </ul>
-        <AddPlayersForm playId={play.id} available={available} />
+        <AddPlayersForm
+          playId={play.id}
+          available={available}
+          maxSlots={isRandomRounds ? play.plannedPlayerCount : null}
+          currentCount={play.entries.length}
+        />
       </div>
 
-      {!isRandom ? (
+      {!isIndividual ? (
         <>
           <div className="surface rounded-3xl p-5 sm:p-6">
             <div className="mb-4 flex items-baseline justify-between gap-2">
@@ -242,33 +262,56 @@ export default async function ManagePlayPage({
     </div>
   );
 
+  const activeMatches = play.matches.filter((m) => m.status !== "completed");
+  const canGenerateRounds =
+    isRandomRounds &&
+    play.matches.length === 0 &&
+    play.entries.length >= 4 &&
+    (play.plannedPlayerCount == null ||
+      play.entries.length === play.plannedPlayerCount);
+  const canRegenerateRounds =
+    isRandomRounds &&
+    play.matches.length > 0 &&
+    play.matches.every((m) => m.status === "pending");
+
   const jogos = (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-ink-muted">
-          {doneMatches}/{play.matches.length} finalizados · {FORMAT_LABELS[play.format]}
-          {play.format === "ROUND_ROBIN_MULTI" ? ` (${play.rounds}×)` : ""}
+          {FORMAT_LABELS[play.format]}
+          {play.format === "ROUND_ROBIN_MULTI" || isRandomRounds
+            ? ` (${play.rounds}×)`
+            : ""}
         </p>
         <div className="flex flex-wrap gap-2">
           {play.matches.length === 0 ? (
             <GenerateRoundButton
               playId={play.id}
               mode="first"
-              label={isRandom ? "Gerar 1ª rodada" : "Gerar jogos"}
+              shuffle={isLiveRandom || isRandomRounds}
+              disabled={isRandomRounds && !canGenerateRounds}
+              label={
+                isLiveRandom
+                  ? "Gerar 1º jogo"
+                  : isRandomRounds
+                    ? `Gerar ${play.rounds} rodadas`
+                    : "Gerar jogos"
+              }
               pendingLabel="Gerando…"
             />
-          ) : (
+          ) : null}
+          {canRegenerateRounds ? (
             <form
               action={async () => {
                 "use server";
-                await clearMatches(play.id);
+                await clearRandomRoundsSchedule(play.id);
               }}
             >
               <PendingButton type="submit" variant="danger" pendingLabel="Limpando…">
-                Limpar jogos
+                Limpar chaveamento
               </PendingButton>
             </form>
-          )}
+          ) : null}
           {play.format === "BALANCED_QUEUE" ? (
             <form
               action={async () => {
@@ -281,40 +324,74 @@ export default async function ManagePlayPage({
               </PendingButton>
             </form>
           ) : null}
-          {isRandom && play.matches.length > 0 ? (
+          {isLiveRandom && play.matches.length > 0 ? (
             <GenerateRoundButton
               playId={play.id}
               mode="next"
-              label="Gerar próxima rodada"
+              shuffle
+              label="Gerar próximo jogo"
               pendingLabel="Sorteando…"
             />
           ) : null}
         </div>
       </div>
 
-      <AdminMatchRounds
-        playId={play.id}
-        matches={play.matches}
-        allowLineupEdit={isRandom}
-        roster={play.entries.map((e) => e.player)}
-        emptyHint={
-          isRandom
-            ? "Com ≥4 jogadores, gere a 1ª rodada."
-            : "Com ≥2 duplas ativas, gere o chaveamento."
-        }
-      />
+      {isRandomRounds && play.matches.length === 0 && !canGenerateRounds ? (
+        <p className="text-sm text-amber-800">
+          {play.entries.length < 4
+            ? "Adicione pelo menos 4 jogadores."
+            : `Elenco: ${play.entries.length}/${play.plannedPlayerCount ?? "?"} — precisa bater a quantidade planejada.`}
+        </p>
+      ) : null}
+
+      {isRandomRounds ? (
+        <AdminMatchRounds
+          playId={play.id}
+          matches={play.matches}
+          layout="rounds"
+          roster={play.entries.map((e) => e.player)}
+          emptyHint={`Com ${play.plannedPlayerCount ?? "≥4"} jogadores, gere as ${play.rounds} rodadas.`}
+        />
+      ) : (
+        <JogosSubTabs
+          counts={{ ativos: activeMatches.length, finalizados: doneMatches }}
+          ativos={
+            <AdminMatchRounds
+              playId={play.id}
+              matches={play.matches}
+              scope="active"
+              allowLineupEdit={isLiveRandom}
+              roster={play.entries.map((e) => e.player)}
+              emptyHint={
+                isLiveRandom
+                  ? "Com ≥4 jogadores livres, gere o próximo jogo."
+                  : "Com ≥2 duplas ativas, gere o chaveamento."
+              }
+            />
+          }
+          finalizados={
+            <AdminMatchRounds
+              playId={play.id}
+              matches={play.matches}
+              scope="completed"
+              allowLineupEdit={false}
+              roster={play.entries.map((e) => e.player)}
+            />
+          }
+        />
+      )}
     </div>
   );
 
   const rankingPanel = (
     <div className="space-y-4">
       <p className="text-sm text-ink-muted">
-        {isRandom
+        {isIndividual
           ? "Ranking individual. Ordenação: vitórias → saldo de games → games ganhos."
           : "Ativas primeiro. Duplas que saíram ficam marcadas e mantêm o histórico."}
       </p>
-      {isRandom ? (
-        <IndividualRankingTable rows={individualRanking} playId={play.id} />
+      {isIndividual ? (
+        <IndividualRankingTable rows={individualRanking} playId={play.slug} />
       ) : (
         <RankingTable rows={pairRanking} />
       )}
@@ -339,14 +416,16 @@ export default async function ManagePlayPage({
             </h1>
             <p className="mt-2 text-sm text-ink-muted">
               {FORMAT_LABELS[play.format]}
-              {play.format === "ROUND_ROBIN_MULTI" ? ` · ${play.rounds} séries` : ""}
-              {!isRandom
+              {play.format === "ROUND_ROBIN_MULTI" || isRandomRounds
+                ? ` · ${play.rounds} rodadas`
+                : ""}
+              {!isIndividual
                 ? ` · ${PAIRING_LABELS[play.pairingMode]}`
                 : ` · ${MIXED_PAIRING_LABELS[play.mixedPairing]}`}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <LinkButton href={`/plays/${play.id}`} variant="secondary">
+            <LinkButton href={`/plays/${play.slug}`} variant="secondary">
               Página pública
             </LinkButton>
             {play.status !== "finished" ? (
@@ -379,8 +458,14 @@ export default async function ManagePlayPage({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Stat label="Jogadores" value={play.entries.length} />
           <Stat
-            label={isRandom ? "Rodadas" : "Duplas ativas"}
-            value={isRandom ? rounds.length : activePairs.length}
+            label={isLiveRandom ? "Livres" : isRandomRounds ? "Rodadas" : "Duplas ativas"}
+            value={
+              isLiveRandom
+                ? freePlayers
+                : isRandomRounds
+                  ? play.rounds
+                  : activePairs.length
+            }
           />
           <Stat label="Jogos" value={play.matches.length} />
           <Stat label="Finalizados" value={doneMatches} />
@@ -390,7 +475,7 @@ export default async function ManagePlayPage({
       <ManageTabs
         initialTab={tab}
         counts={{
-          participantes: isRandom
+          participantes: isIndividual
             ? play.entries.length
             : play.entries.length + activePairs.length,
           jogos: play.matches.length,

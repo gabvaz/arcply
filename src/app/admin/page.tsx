@@ -55,7 +55,7 @@ export default async function AdminPage() {
             {plays.map((p) => (
               <li key={p.id}>
                 <Link
-                  href={`/admin/plays/${p.id}`}
+                  href={`/admin/plays/${p.slug}`}
                   className="surface flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-3.5 transition hover:-translate-y-0.5 hover:border-mint/35"
                 >
                   <div>

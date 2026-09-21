@@ -142,10 +142,20 @@ export function generateBalancedPool(
  * Quantas partidas RR/MULTI devem existir entre um par de duplas.
  */
 export function requiredMeetings(
-  format: "ROUND_ROBIN" | "ROUND_ROBIN_MULTI" | "BALANCED_QUEUE" | "RANDOM",
+  format:
+    | "ROUND_ROBIN"
+    | "ROUND_ROBIN_MULTI"
+    | "BALANCED_QUEUE"
+    | "RANDOM"
+    | "RANDOM_ROUNDS",
   playRounds: number,
 ): number {
-  if (format === "BALANCED_QUEUE" || format === "RANDOM") return 0;
+  if (
+    format === "BALANCED_QUEUE" ||
+    format === "RANDOM" ||
+    format === "RANDOM_ROUNDS"
+  )
+    return 0;
   if (format === "ROUND_ROBIN_MULTI") return playRounds;
   return 1;
 }
@@ -567,6 +577,160 @@ export function generateRandomRound(
   return { courts: bestCourts, byes };
 }
 
+const NEED_FOUR_FREE = "Precisa de pelo menos 4 jogadores livres";
+
+export type RandomMatchResult = {
+  court?: RandomCourt;
+  error?: string;
+};
+
+/**
+ * Gera **um** jogo entre jogadores disponíveis (já filtrados como livres).
+ * Prioriza equalizar nº de jogos e parceiros/adversários novos.
+ */
+export function generateRandomMatch(
+  availableIds: string[],
+  history: PlayerHistory,
+  opts?: {
+    trials?: number;
+    genderByPlayer?: Map<string, GenderCode>;
+    mixedPairing?: MixedPairingPolicy;
+  },
+): RandomMatchResult {
+  if (availableIds.length < 4) {
+    return { error: NEED_FOUR_FREE };
+  }
+
+  const policy = opts?.mixedPairing ?? "IGNORE";
+  const genderByPlayer = opts?.genderByPlayer ?? new Map();
+  const trials = opts?.trials ?? 200;
+
+  if (policy === "REQUIRED") {
+    const males = availableIds.filter((id) => genderByPlayer.get(id) === "MALE");
+    const females = availableIds.filter(
+      (id) => genderByPlayer.get(id) === "FEMALE",
+    );
+    if (males.length < 2 || females.length < 2) {
+      return { error: MIXED_REQUIRED_ERROR };
+    }
+
+    let bestCourt: RandomCourt | null = null;
+    let bestCost = Infinity;
+
+    for (let t = 0; t < Math.max(trials, 80); t++) {
+      // Prefer fewer-played within each gender
+      const mPick = pickLowestPlayed(males, history, 2);
+      const fPick = pickLowestPlayed(females, history, 2);
+      if (mPick.length < 2 || fPick.length < 2) continue;
+
+      const pairs: [string, string][] = [
+        [mPick[0]!, fPick[0]!],
+        [mPick[1]!, fPick[1]!],
+      ];
+      // Also try swapped female assignment
+      const pairAlts: [string, string][][] = [
+        pairs,
+        [
+          [mPick[0]!, fPick[1]!],
+          [mPick[1]!, fPick[0]!],
+        ],
+      ];
+      for (const ps of pairAlts) {
+        const candidates: RandomCourt[] = [
+          {
+            homeA: ps[0]![0],
+            homeB: ps[0]![1],
+            awayA: ps[1]![0],
+            awayB: ps[1]![1],
+          },
+          {
+            homeA: ps[1]![0],
+            homeB: ps[1]![1],
+            awayA: ps[0]![0],
+            awayB: ps[0]![1],
+          },
+        ];
+        for (const court of candidates) {
+          const c =
+            courtCost(court, history, genderByPlayer, false) +
+            singleMatchBalanceCost(availableIds, history, court);
+          if (c < bestCost) {
+            bestCost = c;
+            bestCourt = court;
+          }
+        }
+      }
+    }
+
+    if (!bestCourt) return { error: MIXED_REQUIRED_ERROR };
+    return { court: bestCourt };
+  }
+
+  const preferMixed = policy === "PREFERRED";
+  let bestCourt: RandomCourt | null = null;
+  let bestCost = Infinity;
+
+  for (let t = 0; t < trials; t++) {
+    const four = pickLowestPlayed(availableIds, history, 4);
+    if (four.length < 4) continue;
+    shuffleInPlace(four);
+    const group = four as [string, string, string, string];
+    const picked = bestCourtForGroup(group, history, {
+      genderByPlayer,
+      preferMixed,
+    });
+    if (!picked) continue;
+    const c =
+      picked.cost + singleMatchBalanceCost(availableIds, history, picked.court);
+    if (c < bestCost) {
+      bestCost = c;
+      bestCourt = picked.court;
+    }
+  }
+
+  if (!bestCourt) return { error: "Não foi possível gerar o jogo" };
+  return { court: bestCourt };
+}
+
+/** Entre candidatos, pega `count` com menos jogos (empate: shuffle). */
+function pickLowestPlayed(
+  ids: string[],
+  h: PlayerHistory,
+  count: number,
+): string[] {
+  const ranked = [...ids].sort((a, b) => {
+    const d = (h.played.get(a) ?? 0) - (h.played.get(b) ?? 0);
+    if (d !== 0) return d;
+    return Math.random() - 0.5;
+  });
+  // Take a window of the lowest + some slack, then shuffle pick
+  const window = ranked.slice(0, Math.min(ids.length, Math.max(count * 2, count + 2)));
+  shuffleInPlace(window);
+  return window.slice(0, count);
+}
+
+function singleMatchBalanceCost(
+  availableIds: string[],
+  h: PlayerHistory,
+  court: RandomCourt,
+): number {
+  const playing = new Set([
+    court.homeA,
+    court.homeB,
+    court.awayA,
+    court.awayB,
+  ]);
+  const projected = availableIds.map((id) => {
+    const base = h.played.get(id) ?? 0;
+    return playing.has(id) ? base + 1 : base;
+  });
+  const min = Math.min(...projected);
+  const max = Math.max(...projected);
+  let sumDev = 0;
+  for (const v of projected) sumDev += v - min;
+  return sumDev * W_ROUND_BALANCE + (max - min) * W_ROUND_BALANCE * 2;
+}
+
 /**
  * Pendentes faltantes entre `newPair` e cada `activeOthers`.
  * Conta completed+pending existentes; cria o que faltar até requiredMeetings.
@@ -575,7 +739,7 @@ export function fixturesForNewPair(opts: {
   newPairId: string;
   activeOthers: PairRef[];
   existing: ExistingMatch[];
-  format: "ROUND_ROBIN" | "ROUND_ROBIN_MULTI" | "BALANCED_QUEUE" | "RANDOM";
+  format: "ROUND_ROBIN" | "ROUND_ROBIN_MULTI" | "BALANCED_QUEUE" | "RANDOM" | "RANDOM_ROUNDS";
   playRounds: number;
   startOrderIndex: number;
   startRound: number;
@@ -668,4 +832,315 @@ export function groupMatchesIntoRounds<T extends { round: number; status: string
     }),
     complete: items.length > 0 && items.every((m) => m.status === "completed"),
   }));
+}
+
+// ─── RANDOM_ROUNDS (chaveamento pré-agendado) ───────────────────────────────
+
+export type VarietyPolicyCode = "PREFER_NEW" | "STRICT";
+
+export type RandomRoundsCapacity = {
+  gamesPerRound: number;
+  sitPerRound: number;
+  totalGames: number;
+  /** Média de jogos por pessoa (com byes balanceados). */
+  gamesPerPlayerAvg: number;
+  /** Pior caso: alguém joga todas as rodadas. */
+  gamesPerPlayerMax: number;
+  /**
+   * Teto teórico sem rematch de parceiro (pigeonhole).
+   * Necessário, não suficiente p/ o gerador.
+   */
+  maxRoundsNoPartnerRepeat: number;
+  /**
+   * Teto teórico sem rematch de adversário (pigeonhole).
+   */
+  maxRoundsNoOpponentRepeat: number;
+  /** min(parceiro, adversário) — teto teórico STRICT. */
+  maxRoundsStrict: number;
+  /** Pior frequência mínima forçada de mesmo parceiro (pigeonhole). */
+  minPartnerRepeats: number;
+  /** Pior frequência mínima forçada de mesmo adversário. */
+  minOpponentRepeats: number;
+  warnings: string[];
+  insights: string[];
+};
+
+/**
+ * Preview de capacidade (teto conservador).
+ *
+ * Por jogo: 1 parceiro + 2 adversários.
+ * Com n jogadores há n−1 outras pessoas.
+ * Se alguém jogar todas as R rodadas (possível quando há sentados mal
+ * distribuídos, ou sempre quando n%4===0):
+ *   - sem rematch parceiro ⇔ R ≤ n−1
+ *   - sem rematch adversário ⇔ 2R ≤ n−1 ⇔ R ≤ ⌊(n−1)/2⌋
+ */
+export function estimateRandomRoundsCapacity(
+  n: number,
+  rounds: number,
+): RandomRoundsCapacity {
+  const warnings: string[] = [];
+  const insights: string[] = [];
+
+  if (n < 4) {
+    return {
+      gamesPerRound: 0,
+      sitPerRound: n > 0 ? n : 0,
+      totalGames: 0,
+      gamesPerPlayerAvg: 0,
+      gamesPerPlayerMax: 0,
+      maxRoundsNoPartnerRepeat: 0,
+      maxRoundsNoOpponentRepeat: 0,
+      maxRoundsStrict: 0,
+      minPartnerRepeats: 0,
+      minOpponentRepeats: 0,
+      warnings: ["Precisa de pelo menos 4 participantes"],
+      insights: [],
+    };
+  }
+
+  const R = Math.max(0, rounds);
+  const gamesPerRound = Math.floor(n / 4);
+  const sitPerRound = n % 4;
+  const totalGames = R * gamesPerRound;
+  const playRate = (n - sitPerRound) / n;
+  const gamesPerPlayerAvg = Math.round(R * playRate * 10) / 10;
+  // Conservador: alguém pode jogar todas as rodadas
+  const gamesPerPlayerMax = R;
+
+  const others = n - 1;
+  const maxRoundsNoPartnerRepeat = others; // 1 parceiro/jogo
+  const maxRoundsNoOpponentRepeat = Math.floor(others / 2); // 2 adv/jogo
+  const maxRoundsStrict = Math.min(
+    maxRoundsNoPartnerRepeat,
+    maxRoundsNoOpponentRepeat,
+  );
+
+  // Pigeonhole no pior caso (jogar as R rodadas)
+  const minPartnerRepeats =
+    gamesPerPlayerMax <= 0
+      ? 0
+      : Math.ceil(gamesPerPlayerMax / others);
+  const minOpponentRepeats =
+    gamesPerPlayerMax <= 0
+      ? 0
+      : Math.ceil((2 * gamesPerPlayerMax) / others);
+
+  if (sitPerRound > 0) {
+    insights.push(
+      `${sitPerRound} jogador(es) sentam por rodada (~${gamesPerPlayerAvg} jogos/pessoa em média)`,
+    );
+  } else {
+    insights.push(`Todos jogam todas as rodadas (${R} jogos por pessoa)`);
+  }
+
+  insights.push(
+    `${gamesPerRound} jogo(s) por rodada · ${totalGames} jogo(s) no total`,
+  );
+
+  insights.push(
+    `Teto teórico sem rematch: ${maxRoundsStrict} rodada(s) (adversário; parceiro até ${maxRoundsNoPartnerRepeat}). STRICT valida no gerador — pode falhar antes.`,
+  );
+
+  if (minOpponentRepeats >= 2) {
+    warnings.push(
+      `Quem jogar as ${R} rodadas enfrentará o mesmo adversário pelo menos ${minOpponentRepeats}×`,
+    );
+  } else if (R > 0 && R <= maxRoundsNoOpponentRepeat) {
+    insights.push(
+      "Há margem: rematch de adversário não é matematicamente forçado",
+    );
+  }
+
+  if (minPartnerRepeats >= 2) {
+    warnings.push(
+      `Quem jogar as ${R} rodadas será parceiro da mesma pessoa pelo menos ${minPartnerRepeats}×`,
+    );
+  }
+
+  // Média: se a média já força rematch
+  const avgOppRepeats =
+    gamesPerPlayerAvg <= 0
+      ? 0
+      : Math.ceil((2 * gamesPerPlayerAvg) / others);
+  if (avgOppRepeats >= 2 && minOpponentRepeats < 2) {
+    warnings.push(
+      `Na média (~${gamesPerPlayerAvg} jogos), alguém tende a enfrentar o mesmo adversário ≥${avgOppRepeats}×`,
+    );
+  }
+
+  if (R > maxRoundsStrict) {
+    warnings.push(
+      `Pediu ${R} rodadas; sem rematch confiável só até ${maxRoundsStrict} com ${n} jogadores`,
+    );
+  }
+
+  return {
+    gamesPerRound,
+    sitPerRound,
+    totalGames,
+    gamesPerPlayerAvg,
+    gamesPerPlayerMax,
+    maxRoundsNoPartnerRepeat,
+    maxRoundsNoOpponentRepeat,
+    maxRoundsStrict,
+    minPartnerRepeats,
+    minOpponentRepeats,
+    warnings,
+    insights,
+  };
+}
+
+/** Custo só de rematch (parceiro/adversário), ignora balance/gênero. */
+function rematchOnlyCost(court: RandomCourt, h: PlayerHistory): number {
+  let cost = 0;
+  if (h.partners.get(court.homeA)?.has(court.homeB)) cost += W_PARTNER;
+  if (h.partners.get(court.awayA)?.has(court.awayB)) cost += W_PARTNER;
+  for (const p of [court.homeA, court.homeB]) {
+    for (const o of [court.awayA, court.awayB]) {
+      if (h.opponents.get(p)?.has(o)) cost += W_OPPONENT;
+    }
+  }
+  return cost;
+}
+
+function applyCourtToHistory(h: PlayerHistory, court: RandomCourt): void {
+  const { homeA, homeB, awayA, awayB } = court;
+  getSet(h.partners, homeA).add(homeB);
+  getSet(h.partners, homeB).add(homeA);
+  getSet(h.partners, awayA).add(awayB);
+  getSet(h.partners, awayB).add(awayA);
+  for (const p of [homeA, homeB]) {
+    for (const o of [awayA, awayB]) getSet(h.opponents, p).add(o);
+    h.played.set(p, (h.played.get(p) ?? 0) + 1);
+  }
+  for (const p of [awayA, awayB]) {
+    for (const o of [homeA, homeB]) getSet(h.opponents, p).add(o);
+    h.played.set(p, (h.played.get(p) ?? 0) + 1);
+  }
+}
+
+function applyRoundToHistory(
+  h: PlayerHistory,
+  courts: RandomCourt[],
+  byes: string[],
+): void {
+  for (const court of courts) applyCourtToHistory(h, court);
+  for (const id of byes) {
+    h.byes.set(id, (h.byes.get(id) ?? 0) + 1);
+  }
+}
+
+export type ScheduledRound = {
+  round: number;
+  courts: RandomCourt[];
+  byes: string[];
+};
+
+export type RandomRoundsScheduleResult = {
+  rounds?: ScheduledRound[];
+  error?: string;
+};
+
+/**
+ * Gera N rodadas completas, acumulando histórico.
+ * STRICT: falha se alguma rodada ainda tiver rematch após trials.
+ */
+export function generateRandomRoundsSchedule(
+  playerIds: string[],
+  rounds: number,
+  opts?: {
+    trials?: number;
+    genderByPlayer?: Map<string, GenderCode>;
+    mixedPairing?: MixedPairingPolicy;
+    varietyPolicy?: VarietyPolicyCode;
+  },
+): RandomRoundsScheduleResult {
+  if (playerIds.length < 4) {
+    return { error: "Precisa de pelo menos 4 jogadores" };
+  }
+  if (rounds < 1) {
+    return { error: "Informe pelo menos 1 rodada" };
+  }
+
+  const variety = opts?.varietyPolicy ?? "PREFER_NEW";
+  const history = emptyPlayerHistory(playerIds);
+  const scheduled: ScheduledRound[] = [];
+  const trials = opts?.trials ?? (variety === "STRICT" ? 500 : 300);
+
+  for (let r = 1; r <= rounds; r++) {
+    const result = generateRandomRound(playerIds, history, {
+      trials,
+      genderByPlayer: opts?.genderByPlayer,
+      mixedPairing: opts?.mixedPairing,
+    });
+    if (result.error) return { error: result.error };
+    if (!result.courts.length) {
+      return { error: `Não foi possível montar a rodada ${r}` };
+    }
+
+    if (variety === "STRICT") {
+      const rematch = result.courts.reduce(
+        (acc, c) => acc + rematchOnlyCost(c, history),
+        0,
+      );
+      if (rematch > 0) {
+        return {
+          error: `Impossível montar ${rounds} rodadas sem repetir parceiro/adversário com ${playerIds.length} jogadores (falhou na rodada ${r})`,
+        };
+      }
+    }
+
+    scheduled.push({ round: r, courts: result.courts, byes: result.byes });
+    applyRoundToHistory(history, result.courts, result.byes);
+  }
+
+  return { rounds: scheduled };
+}
+
+export type StrictProbeResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+/**
+ * Dry-run do gerador STRICT com IDs fictícios.
+ * O teto por pigeonhole é necessário, não suficiente — por isso a criação
+ * precisa desta sonda (mesma falha que aparece na geração).
+ */
+export function probeStrictRandomRounds(
+  n: number,
+  rounds: number,
+  opts?: { attempts?: number; trials?: number },
+): StrictProbeResult {
+  if (n < 4) {
+    return { ok: false, error: "Precisa de pelo menos 4 participantes" };
+  }
+  if (rounds < 1) {
+    return { ok: false, error: "Informe pelo menos 1 rodada" };
+  }
+
+  const theory = Math.floor((n - 1) / 2);
+  if (rounds > theory) {
+    return {
+      ok: false,
+      error: `Impossível montar ${rounds} rodadas sem repetir parceiro/adversário com ${n} jogadores (teto matemático: ${theory})`,
+    };
+  }
+
+  const ids = Array.from({ length: n }, (_, i) => `__probe_${i}`);
+  const attempts = opts?.attempts ?? 12;
+  const trials = opts?.trials ?? 400;
+  let lastError =
+    `Impossível montar ${rounds} rodadas sem repetir parceiro/adversário com ${n} jogadores`;
+
+  for (let a = 0; a < attempts; a++) {
+    const result = generateRandomRoundsSchedule(ids, rounds, {
+      varietyPolicy: "STRICT",
+      trials,
+    });
+    if (!result.error) return { ok: true };
+    lastError = result.error;
+  }
+
+  return { ok: false, error: lastError };
 }

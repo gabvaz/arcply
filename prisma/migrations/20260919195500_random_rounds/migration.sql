@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Play" ADD COLUMN "plannedPlayerCount" INTEGER;
+ALTER TABLE "Play" ADD COLUMN "varietyPolicy" TEXT NOT NULL DEFAULT 'PREFER_NEW';
