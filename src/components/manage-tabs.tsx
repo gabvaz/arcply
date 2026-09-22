@@ -32,7 +32,11 @@ function normalizeManageTab(raw?: string | null): ManageTabId {
   return "participantes";
 }
 
-function normalizePublicTab(raw?: string | null): PublicTabId {
+function normalizePublicTab(
+  raw?: string | null,
+  opts?: { hideRanking?: boolean },
+): PublicTabId {
+  if (opts?.hideRanking) return "jogos";
   if (raw === "jogos" || raw === "finalizados") return "jogos";
   return "ranking";
 }
@@ -186,26 +190,44 @@ export function PublicTabs({
   jogos,
   counts,
   initialTab,
+  hideRanking = false,
 }: {
-  ranking: React.ReactNode;
+  ranking?: React.ReactNode;
   jogos: React.ReactNode;
-  counts: { ranking: number; jogos: number };
+  counts: { ranking?: number; jogos: number };
   initialTab?: string | null;
+  /** RANDOM_ROUNDS: ranking só no admin. */
+  hideRanking?: boolean;
 }) {
-  const [active, select] = useClientTab(normalizePublicTab(initialTab));
+  const [active, select] = useClientTab(
+    normalizePublicTab(initialTab, { hideRanking }),
+  );
+
+  if (hideRanking) {
+    return <div className="space-y-6 animate-rise">{jogos}</div>;
+  }
 
   return (
     <div className="space-y-6">
       <TabBar
         tabs={PUBLIC_TABS}
         active={active}
-        counts={counts}
+        counts={{
+          ranking: counts.ranking ?? 0,
+          jogos: counts.jogos,
+        }}
         onSelect={select}
       />
-      <div hidden={active !== "ranking"} className={active === "ranking" ? "animate-rise" : undefined}>
+      <div
+        hidden={active !== "ranking"}
+        className={active === "ranking" ? "animate-rise" : undefined}
+      >
         {ranking}
       </div>
-      <div hidden={active !== "jogos"} className={active === "jogos" ? "animate-rise" : undefined}>
+      <div
+        hidden={active !== "jogos"}
+        className={active === "jogos" ? "animate-rise" : undefined}
+      >
         {jogos}
       </div>
     </div>

@@ -60,6 +60,7 @@ export default async function PublicPlayPage({
   const rankingRows = isIndividual ? individualRanking : pairRanking;
   const done = play.matches.filter((m) => m.status === "completed").length;
   const active = play.matches.length - done;
+  const hidePublicRanking = isRandomRounds;
 
   return (
     <div className="space-y-8">
@@ -107,9 +108,13 @@ export default async function PublicPlayPage({
 
       <PublicTabs
         initialTab={tab}
-        counts={{ ranking: rankingRows.length, jogos: play.matches.length }}
+        hideRanking={hidePublicRanking}
+        counts={{
+          ranking: hidePublicRanking ? undefined : rankingRows.length,
+          jogos: play.matches.length,
+        }}
         ranking={
-          isIndividual ? (
+          hidePublicRanking ? undefined : isIndividual ? (
             <IndividualRankingTable rows={individualRanking} playId={play.slug} />
           ) : (
             <RankingTable rows={pairRanking} />
@@ -121,6 +126,8 @@ export default async function PublicPlayPage({
               matches={play.matches}
               layout="rounds"
               roster={play.entries.map((e) => e.player)}
+              playId={play.id}
+              allowPublicScoring
             />
           ) : (
             <JogosSubTabs

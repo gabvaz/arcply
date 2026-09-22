@@ -14,6 +14,7 @@ import {
 } from "@/components/play-views";
 import { ManageTabs, JogosSubTabs } from "@/components/manage-tabs";
 import { DeletePlayButton } from "@/components/delete-play-button";
+import { ClearRandomRoundsResultsButton } from "@/components/clear-random-rounds-results-button";
 import { computeRanking, computeIndividualRanking, mergeIndividualRoster } from "@/lib/ranking";
 import {
   FORMAT_LABELS,
@@ -273,6 +274,11 @@ export default async function ManagePlayPage({
     isRandomRounds &&
     play.matches.length > 0 &&
     play.matches.every((m) => m.status === "pending");
+  const canClearResults =
+    isRandomRounds &&
+    play.matches.some(
+      (m) => m.status !== "pending" || m.gamesHome != null || m.gamesAway != null,
+    );
 
   const jogos = (
     <div className="space-y-5">
@@ -311,6 +317,9 @@ export default async function ManagePlayPage({
                 Limpar chaveamento
               </PendingButton>
             </form>
+          ) : null}
+          {canClearResults ? (
+            <ClearRandomRoundsResultsButton playId={play.id} />
           ) : null}
           {play.format === "BALANCED_QUEUE" ? (
             <form

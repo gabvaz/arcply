@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
 import { Spinner } from "@/components/pending-button";
 import { recordScore, clearScore } from "@/lib/actions/plays";
@@ -68,56 +69,64 @@ export function ScoreForm({
   const [away, setAway] = useState(initialAway ?? 0);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const router = useRouter();
 
   function submit() {
     setError(null);
     start(async () => {
       const res = await recordScore(playId, matchId, home, away);
       if (res?.error) setError(res.error);
+      else router.refresh();
     });
   }
 
   if (completed) {
     const homeWon = (initialHome ?? 0) > (initialAway ?? 0);
     return (
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
-        <div className="flex items-baseline gap-3">
-          <span
-            className={`font-display text-3xl font-bold tabular-nums ${
-              homeWon ? "text-mint-deep" : "text-ink-muted"
-            }`}
+      <div className="space-y-2 border-t border-line pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-baseline gap-3">
+            <span
+              className={`font-display text-3xl font-bold tabular-nums ${
+                homeWon ? "text-mint-deep" : "text-ink-muted"
+              }`}
+            >
+              {initialHome}
+            </span>
+            <span className="text-ink-muted">×</span>
+            <span
+              className={`font-display text-3xl font-bold tabular-nums ${
+                !homeWon ? "text-mint-deep" : "text-ink-muted"
+              }`}
+            >
+              {initialAway}
+            </span>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={pending}
+            aria-busy={pending}
+            onClick={() =>
+              start(async () => {
+                setError(null);
+                const res = await clearScore(playId, matchId);
+                if (res?.error) setError(res.error);
+                else router.refresh();
+              })
+            }
           >
-            {initialHome}
-          </span>
-          <span className="text-ink-muted">×</span>
-          <span
-            className={`font-display text-3xl font-bold tabular-nums ${
-              !homeWon ? "text-mint-deep" : "text-ink-muted"
-            }`}
-          >
-            {initialAway}
-          </span>
+            {pending ? (
+              <>
+                <Spinner />
+                …
+              </>
+            ) : (
+              "Editar"
+            )}
+          </Button>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          disabled={pending}
-          aria-busy={pending}
-          onClick={() =>
-            start(async () => {
-              await clearScore(playId, matchId);
-            })
-          }
-        >
-          {pending ? (
-            <>
-              <Spinner />
-              …
-            </>
-          ) : (
-            "Editar"
-          )}
-        </Button>
+        {error ? <p className="text-sm font-medium text-coral">{error}</p> : null}
       </div>
     );
   }

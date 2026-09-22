@@ -113,6 +113,7 @@ function MatchSection({
   roster,
   allowLineupEdit,
   admin,
+  allowPublicScoring = false,
   showFamiliarity = false,
 }: {
   title: string;
@@ -123,6 +124,8 @@ function MatchSection({
   roster: { id: string; name: string; gender?: "MALE" | "FEMALE" }[];
   allowLineupEdit: boolean;
   admin: boolean;
+  /** RANDOM_ROUNDS público: qualquer um registra placar. */
+  allowPublicScoring?: boolean;
   showFamiliarity?: boolean;
 }) {
   if (!matches.length) {
@@ -135,6 +138,8 @@ function MatchSection({
       </section>
     );
   }
+
+  const canScore = admin || allowPublicScoring;
 
   return (
     <section className="space-y-3">
@@ -190,7 +195,7 @@ function MatchSection({
               <StartMatchButton playId={playId} matchId={m.id} />
             ) : null}
 
-            {admin &&
+            {canScore &&
             (m.status === "in_progress" ||
               (m.status === "pending" && !allowLineupEdit)) ? (
               <ScoreForm
@@ -205,7 +210,7 @@ function MatchSection({
             ) : null}
 
             {m.status === "completed" ? (
-              admin ? (
+              canScore ? (
                 <ScoreForm
                   playId={playId}
                   matchId={m.id}
@@ -224,10 +229,10 @@ function MatchSection({
               )
             ) : null}
 
-            {!admin && m.status === "pending" ? (
+            {!canScore && m.status === "pending" ? (
               <p className="text-sm text-ink-muted">Aguardando início</p>
             ) : null}
-            {!admin && m.status === "in_progress" ? (
+            {!canScore && m.status === "in_progress" ? (
               <p className="text-sm font-semibold text-mint-deep">Em jogo</p>
             ) : null}
           </li>
@@ -242,11 +247,15 @@ export function MatchList({
   scope = "active",
   layout = "status",
   roster = [],
+  playId = "",
+  allowPublicScoring = false,
 }: {
   matches: MatchView[];
   scope?: "active" | "completed";
   layout?: "status" | "rounds";
   roster?: { id: string; name: string; gender?: "MALE" | "FEMALE" }[];
+  playId?: string;
+  allowPublicScoring?: boolean;
 }) {
   const groups = useMemo(() => groupByStatus(matches), [matches]);
 
@@ -254,9 +263,10 @@ export function MatchList({
     return (
       <RoundGroupedMatches
         allMatches={matches}
-        playId=""
+        playId={playId}
         roster={roster}
         admin={false}
+        allowPublicScoring={allowPublicScoring}
         showFamiliarity
         empty={
           scope === "completed"
@@ -346,6 +356,7 @@ function RoundGroupedMatches({
   playId,
   roster,
   admin,
+  allowPublicScoring = false,
   showFamiliarity,
   empty,
 }: {
@@ -353,6 +364,7 @@ function RoundGroupedMatches({
   playId: string;
   roster: { id: string; name: string; gender?: "MALE" | "FEMALE" }[];
   admin: boolean;
+  allowPublicScoring?: boolean;
   showFamiliarity?: boolean;
   empty: string;
 }) {
@@ -458,6 +470,7 @@ function RoundGroupedMatches({
         roster={roster}
         allowLineupEdit={false}
         admin={admin}
+        allowPublicScoring={allowPublicScoring}
         showFamiliarity={showFamiliarity}
       />
     </div>

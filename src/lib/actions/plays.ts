@@ -614,6 +614,51 @@ export async function clearRandomRoundsSchedule(playId: string) {
   return { ok: true };
 }
 
+/**
+ * Zera placares/status de todos os jogos RANDOM_ROUNDS.
+ * Mantém chaveamento (matches + pairs).
+ */
+export async function clearRandomRoundsResults(playId: string) {
+  await requireAdmin();
+  const play = await prisma.play.findUnique({
+    where: { id: playId },
+    include: { matches: { select: { id: true, status: true, gamesHome: true } } },
+  });
+  if (!play) return { error: "Play não encontrado" };
+  if (play.format !== "RANDOM_ROUNDS") {
+    return { error: "Só disponível no formato Aleatório × N rodadas" };
+  }
+  if (!play.matches.length) {
+    return { error: "Não há jogos para limpar" };
+  }
+
+  const dirty = play.matches.some(
+    (m) => m.status !== "pending" || m.gamesHome != null,
+  );
+  if (!dirty) {
+    return { error: "Nenhum placar para limpar" };
+  }
+
+  await prisma.$transaction([
+    prisma.match.updateMany({
+      where: { playId },
+      data: {
+        gamesHome: null,
+        gamesAway: null,
+        scoreOverride: false,
+        status: "pending",
+      },
+    }),
+    prisma.play.update({
+      where: { id: playId },
+      data: { status: "in_progress" },
+    }),
+  ]);
+
+  await revalidatePlay(playId);
+  return { ok: true };
+}
+
 export async function addNextBalancedMatch(playId: string) {
   await requireAdmin();
   const play = await prisma.play.findUnique({
@@ -731,9 +776,13 @@ export async function recordScore(
   gamesHome: number,
   gamesAway: number,
 ) {
-  await requireAdmin();
   const play = await prisma.play.findUnique({ where: { id: playId } });
   if (!play) return { error: "Play não encontrado" };
+
+  // RANDOM_ROUNDS: placar aberto (público). Demais formatos: só admin.
+  if (play.format !== "RANDOM_ROUNDS") {
+    await requireAdmin();
+  }
 
   const match = await prisma.match.findFirst({
     where: { id: matchId, playId },
@@ -765,7 +814,15 @@ export async function recordScore(
 }
 
 export async function clearScore(playId: string, matchId: string) {
-  await requireAdmin();
+  const play = await prisma.play.findUnique({
+    where: { id: playId },
+    select: { format: true },
+  });
+  if (!play) return { error: "Play não encontrado" };
+  if (play.format !== "RANDOM_ROUNDS") {
+    await requireAdmin();
+  }
+
   await prisma.match.update({
     where: { id: matchId },
     data: {
